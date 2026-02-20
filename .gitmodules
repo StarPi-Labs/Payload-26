@@ -1,0 +1,3 @@
+[submodule "Dashboard/Frontend/External"]
+	path = Dashboard/Frontend/External
+	url = https://github.com/adellamaggiora/starpi-payload-dashboard
