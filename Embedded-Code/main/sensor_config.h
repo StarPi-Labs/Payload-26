@@ -54,5 +54,3 @@ typedef struct {
 
 /** Maximum number of sensor drivers that can be registered */
 #define MAX_SENSORS  8
-
-#endif // included via pragma once

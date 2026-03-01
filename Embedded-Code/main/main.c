@@ -51,9 +51,8 @@
 #include "gps.h"
 #endif
 
-#if CONFIG_ENABLE_SD_CARD
-#include "sd_logger.h"
-#endif
+/* Frame logger types are always needed for building frames */
+#include "frame_logger.h"
 
 static const char *TAG = "main";
 
@@ -139,48 +138,104 @@ static size_t ring_buffer_read(uint8_t *dst, size_t max_len)
 }
 
 /* ═══════════════════════════════════════════════════════════
- *  Core 1 — sensor read task
+ *  Core 1 — sensor read task (builds binary frames)
  * ═══════════════════════════════════════════════════════════ */
 
 static void task_sensor_read(void *arg)
 {
     ESP_LOGI(TAG, "Sensor task running on core %d", xPortGetCoreID());
 
-    uint32_t sample_num = 0;
-    uint8_t  combined[SAMPLE_SIZE];
-    uint8_t  tmp[SENSOR_MAX_DATA_LEN];
+    uint16_t frame_id = 0;
+    frame_builder_t fb;
+    uint8_t tmp[SENSOR_MAX_DATA_LEN];
 
     while (1) {
-        size_t offset = 0;
+        /* Start new frame */
+        frame_begin(&fb, frame_id);
 
         /* Timestamp (ms) */
         uint32_t ts = xTaskGetTickCount() * portTICK_PERIOD_MS;
-        memcpy(combined + offset, &ts, sizeof(ts));
-        offset += sizeof(ts);
+        frame_add_timestamp(&fb, ts);
 
-        /* Sample counter */
-        memcpy(combined + offset, &sample_num, sizeof(sample_num));
-        offset += sizeof(sample_num);
-
-        /* Read every registered sensor */
-        for (int i = 0; i < s_num_sensors; i++) {
-            const sensor_driver_t *drv = s_sensors[i];
-            esp_err_t ret = drv->read(tmp);
+        /* MPU6050: Accelerometer + Gyroscope + Temperature */
+#if CONFIG_ENABLE_MPU6050
+        {
+            uint8_t mpu_data[14];
+            esp_err_t ret = mpu6050_read(mpu_data);
             if (ret == ESP_OK) {
-                memcpy(combined + offset, tmp, drv->data_len);
+                /* Accel: bytes 0-5 (X, Y, Z as int16 big-endian) */
+                frame_add_accel(&fb, mpu_data);
+                
+                /* Gyro: bytes 8-13 (X, Y, Z as int16 big-endian) */
+                frame_add_gyro(&fb, mpu_data + 8);
+                
+                /* Temp from MPU: bytes 6-7, expand to 4 bytes */
+                uint8_t temp_data[4] = {mpu_data[6], mpu_data[7], 0, 0};
+                frame_add_temperature(&fb, temp_data);
             } else {
-                memset(combined + offset, 0xFF, drv->data_len);
-                if (ret != ESP_ERR_NOT_FOUND) {  /* GPS returns NOT_FOUND when no data yet */
-                    ESP_LOGW(TAG, "%s read failed: %s", drv->name, esp_err_to_name(ret));
-                }
+                ESP_LOGW(TAG, "MPU6050 read failed: %s", esp_err_to_name(ret));
             }
-            offset += drv->data_len;
         }
+#endif
 
-        if (ring_buffer_write(combined, offset) > 0) {
-            sample_num++;
-            if (sample_num % 500 == 0) {
-                ESP_LOGI(TAG, "Samples: %lu", (unsigned long)sample_num);
+        /* BME280: Pressure + Temperature + Humidity */
+#if CONFIG_ENABLE_BME280
+        {
+            uint8_t bme_data[8];
+            esp_err_t ret = bme280_read(bme_data);
+            if (ret == ESP_OK) {
+                /* Pressure: bytes 0-2 (20-bit), expand to 4 bytes */
+                uint8_t press_data[4] = {bme_data[0], bme_data[1], bme_data[2], 0};
+                frame_add_pressure(&fb, press_data);
+                
+                /* Humidity: bytes 6-7 */
+                frame_add_humidity(&fb, bme_data + 6);
+                
+                /* If MPU6050 not present, use BME280 temperature */
+#if !CONFIG_ENABLE_MPU6050
+                uint8_t temp_data[4] = {bme_data[3], bme_data[4], bme_data[5], 0};
+                frame_add_temperature(&fb, temp_data);
+#endif
+            } else {
+                ESP_LOGW(TAG, "BME280 read failed: %s", esp_err_to_name(ret));
+            }
+        }
+#endif
+
+        /* INA219: Power monitor data */
+#if CONFIG_ENABLE_INA219
+        {
+            uint8_t ina_data[8];
+            esp_err_t ret = ina219_read(ina_data);
+            if (ret == ESP_OK) {
+                frame_add_power(&fb, ina_data);
+            } else {
+                ESP_LOGW(TAG, "INA219 read failed: %s", esp_err_to_name(ret));
+            }
+        }
+#endif
+
+        /* GPS: Raw NMEA data */
+#if CONFIG_ENABLE_GPS
+        {
+            uint8_t gps_data[GPS_MAX_SENTENCE_LEN];
+            esp_err_t ret = gps_read(gps_data);
+            if (ret == ESP_OK) {
+                size_t gps_len = strnlen((char *)gps_data, GPS_MAX_SENTENCE_LEN);
+                frame_add_gps(&fb, gps_data, gps_len);
+            }
+            /* GPS_ERR_NOT_FOUND is normal when no new data */
+        }
+#endif
+
+        /* Finalize frame (adds CRC) */
+        size_t frame_len = frame_finish(&fb);
+
+        /* Write frame to ring buffer */
+        if (ring_buffer_write(frame_get_data(&fb), frame_len) > 0) {
+            frame_id++;
+            if (frame_id % 500 == 0) {
+                ESP_LOGI(TAG, "Frames: %u", frame_id);
             }
         }
 
@@ -189,7 +244,7 @@ static void task_sensor_read(void *arg)
 }
 
 /* ═══════════════════════════════════════════════════════════
- *  Core 0 — SD card write task
+ *  Core 0 — SD card write task (writes binary frames)
  * ═══════════════════════════════════════════════════════════ */
 
 #if CONFIG_ENABLE_SD_CARD
@@ -197,55 +252,30 @@ static void task_sd_write(void *arg)
 {
     ESP_LOGI(TAG, "SD write task running on core %d", xPortGetCoreID());
 
-    FILE *f = sd_logger_get_file();
-    uint8_t buf[SAMPLE_SIZE];
-    uint32_t lines = 0;
+    uint8_t buf[FRAME_MAX_SIZE];
+    uint32_t frames_written = 0;
 
     while (1) {
         if (xSemaphoreTake(ring_buffer.data_available, pdMS_TO_TICKS(1000)) != pdTRUE)
             continue;
 
-        size_t n = ring_buffer_read(buf, SAMPLE_SIZE);
-        if (n == 0 || f == NULL) continue;
+        /* Read frame from ring buffer */
+        size_t n = ring_buffer_read(buf, FRAME_MAX_SIZE);
+        if (n == 0) continue;
 
-        /* Parse header */
-        uint32_t ts, sn;
-        memcpy(&ts, buf, sizeof(ts));
-        memcpy(&sn, buf + 4, sizeof(sn));
-        fprintf(f, "%lu,%lu", (unsigned long)ts, (unsigned long)sn);
-
-        /* Sensor data bytes */
-        size_t off = 8;
-        for (int i = 0; i < s_num_sensors; i++) {
-            for (int j = 0; j < s_sensors[i]->data_len; j++) {
-                fprintf(f, ",%d", buf[off + j]);
-            }
-            off += s_sensors[i]->data_len;
+        /* Write raw binary frame to file */
+        FILE *f = frame_logger_get_file();
+        if (f && fwrite(buf, 1, n, f) == n) {
+            frames_written++;
         }
-        fprintf(f, "\n");
 
-        if (++lines % 100 == 0) {
-            sd_logger_flush();
-            ESP_LOGI(TAG, "SD: %lu lines written", (unsigned long)lines);
+        if (frames_written % 100 == 0) {
+            frame_logger_flush();
+            ESP_LOGI(TAG, "SD: %lu frames written", (unsigned long)frames_written);
         }
     }
 }
 #endif /* CONFIG_ENABLE_SD_CARD */
-
-/* ═══════════════════════════════════════════════════════════
- *  Build CSV header from registered sensors
- * ═══════════════════════════════════════════════════════════ */
-
-static void build_csv_header(char *buf, size_t buf_len)
-{
-    size_t pos = 0;
-    pos += snprintf(buf + pos, buf_len - pos, "timestamp_ms,sample_num");
-    for (int i = 0; i < s_num_sensors; i++) {
-        for (int j = 0; j < s_sensors[i]->data_len; j++) {
-            pos += snprintf(buf + pos, buf_len - pos, ",%s_b%d", s_sensors[i]->name, j);
-        }
-    }
-}
 
 /* ═══════════════════════════════════════════════════════════
  *  app_main
@@ -300,11 +330,9 @@ void app_main(void)
         ESP_LOGW(TAG, "No sensors enabled! Enable at least one via menuconfig.");
     }
 
-    /* ── 3. SD card ──────────────────────────────────────── */
+    /* ── 3. SD card (binary frame logger) ────────────────── */
 #if CONFIG_ENABLE_SD_CARD
-    char csv_hdr[512];
-    build_csv_header(csv_hdr, sizeof(csv_hdr));
-    esp_err_t sd_ret = sd_logger_init(csv_hdr);
+    esp_err_t sd_ret = frame_logger_init();
     if (sd_ret != ESP_OK) {
         ESP_LOGE(TAG, "SD card init failed — data will NOT be logged!");
     }
@@ -328,13 +356,12 @@ void app_main(void)
 
     /* ── 6. Heartbeat / watchdog loop ────────────────────── */
     while (1) {
-        ESP_LOGI(TAG, "Heartbeat | buf=%d bytes | sensors=%d",
-                 (int)ring_buffer_available(), s_num_sensors);
+        ESP_LOGI(TAG, "Heartbeat | buf=%d bytes | sensors=%d",(int)ring_buffer_available(), s_num_sensors);
         vTaskDelay(pdMS_TO_TICKS(5000));
     }
 
     /* unreachable, but good practice */
 #if CONFIG_ENABLE_SD_CARD
-    sd_logger_deinit();
+    frame_logger_deinit();
 #endif
 }

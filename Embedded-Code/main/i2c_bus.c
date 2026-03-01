@@ -47,10 +47,10 @@ i2c_master_bus_handle_t i2c_bus_get_handle(void)
 esp_err_t i2c_bus_write_byte(i2c_master_dev_handle_t dev, uint8_t reg, uint8_t val)
 {
     uint8_t buf[2] = { reg, val };
-    return i2c_master_transmit(dev, buf, sizeof(buf), I2C_TIMEOUT_MS / portTICK_PERIOD_MS);
+    return i2c_master_transmit(dev, buf, sizeof(buf), I2C_TIMEOUT_MS);
 }
 
 esp_err_t i2c_bus_read_bytes(i2c_master_dev_handle_t dev, uint8_t reg, uint8_t *buf, size_t len)
 {
-    return i2c_master_transmit_receive(dev, &reg, 1, buf, len, I2C_TIMEOUT_MS / portTICK_PERIOD_MS);
+    return i2c_master_transmit_receive(dev, &reg, 1, buf, len, I2C_TIMEOUT_MS);
 }

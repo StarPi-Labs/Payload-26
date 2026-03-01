@@ -20,8 +20,8 @@ if(CONFIG_ENABLE_GPS)
     list(APPEND srcs "gps_sensor.c")
 endif()
 
-if(CONFIG_ENABLE_SD_CARD)
-    list(APPEND srcs "sd_logger.c")
-endif()
+# Frame logger is always compiled (frame building types needed)
+# SD card functions are no-ops when SD is disabled
+list(APPEND srcs "frame_logger.c")
 
 idf_component_register(SRCS ${srcs} INCLUDE_DIRS ".")
