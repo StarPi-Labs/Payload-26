@@ -1,25 +1,107 @@
-menu "Example Configuration"
+menu "Star-PI Payload Configuration"
 
-    orsource "$IDF_PATH/examples/common_components/env_caps/$IDF_TARGET/Kconfig.env_caps"
+    comment "──── Peripheral Enables ────"
 
-    config I2C_MASTER_SCL
-        int "SCL GPIO Num"
-        range ENV_GPIO_RANGE_MIN ENV_GPIO_OUT_RANGE_MAX
-        default 4
+    config ENABLE_I2C_BUS
+        bool "Enable I2C bus (required for any I2C sensor)"
+        default y
         help
-            GPIO number for I2C Master clock line.
+            Initialise the shared I2C master bus.
+            Must be enabled if any I2C sensor is enabled.
+
+    config ENABLE_MPU6050
+        bool "Enable MPU-6050 (accelerometer + gyroscope, 0x68)"
+        default y
+        depends on ENABLE_I2C_BUS
+        help
+            MPU-6050 6-axis IMU on I2C address 0x68.
+            Produces 14 bytes per sample: accel(6) + temp(2) + gyro(6).
+
+    config ENABLE_BME280
+        bool "Enable BME280 (pressure / temp / humidity, 0x76)"
+        default n
+        depends on ENABLE_I2C_BUS
+        help
+            BME280 environmental sensor on I2C address 0x76.
+            Produces 8 raw bytes per sample.
+
+    config ENABLE_GPS
+        bool "Enable GPS module (UART)"
+        default n
+        help
+            GPS receiver connected via UART (e.g. u-blox NEO-6M).
+
+    config ENABLE_SD_CARD
+        bool "Enable SD card logging"
+        default y
+        help
+            Log all sensor data to a CSV file on the SD card (SDMMC 1-bit).
+
+    comment "──── Sampling ────"
+
+    config SAMPLE_INTERVAL_MS
+        int "Sensor sample interval (ms)"
+        default 10
+        range 1 10000
+        help
+            Delay between sensor read cycles (all sensors).
+            10 ms ≈ 100 Hz,  1 ms ≈ 1 kHz (if I2C bandwidth allows).
+
+    comment "──── I2C Pin Configuration ────"
 
     config I2C_MASTER_SDA
-        int "SDA GPIO Num"
-        range ENV_GPIO_RANGE_MIN ENV_GPIO_OUT_RANGE_MAX
-        default 5
+        int "I2C SDA GPIO"
+        default 21
+        depends on ENABLE_I2C_BUS
         help
-            GPIO number for I2C Master data line.
+            GPIO number for I2C master data line.
+
+    config I2C_MASTER_SCL
+        int "I2C SCL GPIO"
+        default 22
+        depends on ENABLE_I2C_BUS
+        help
+            GPIO number for I2C master clock line.
 
     config I2C_MASTER_FREQUENCY
-        int "Master Frequency"
+        int "I2C clock frequency (Hz)"
         default 400000
+        depends on ENABLE_I2C_BUS
         help
-            I2C Speed of Master device.
+            I2C master clock speed. 400000 = Fast Mode.
+
+    comment "──── GPS UART Configuration ────"
+
+    config GPS_TXD_PIN
+        int "GPS TX GPIO (ESP → GPS)"
+        default 16
+        depends on ENABLE_GPS
+
+    config GPS_RXD_PIN
+        int "GPS RX GPIO (GPS → ESP)"
+        default 17
+        depends on ENABLE_GPS
+
+    config GPS_BAUD_RATE
+        int "GPS baud rate"
+        default 9600
+        depends on ENABLE_GPS
+
+    comment "──── SD Card Pin Configuration ────"
+
+    config SD_CLK_PIN
+        int "SD CLK GPIO"
+        default 14
+        depends on ENABLE_SD_CARD
+
+    config SD_CMD_PIN
+        int "SD CMD GPIO"
+        default 15
+        depends on ENABLE_SD_CARD
+
+    config SD_D0_PIN
+        int "SD D0 GPIO"
+        default 2
+        depends on ENABLE_SD_CARD
 
 endmenu
