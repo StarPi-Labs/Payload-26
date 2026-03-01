@@ -25,6 +25,15 @@ menu "Star-PI Payload Configuration"
             BME280 environmental sensor on I2C address 0x76.
             Produces 8 raw bytes per sample.
 
+    config ENABLE_INA219
+        bool "Enable INA219 (current / voltage / power, 0x40)"
+        default n
+        depends on ENABLE_I2C_BUS
+        help
+            Adafruit INA219 power monitor on I2C address 0x40.
+            Measures bus voltage, shunt voltage, current, and power.
+            Produces 8 raw bytes per sample.
+
     config ENABLE_GPS
         bool "Enable GPS module (UART)"
         default n

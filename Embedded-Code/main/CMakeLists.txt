@@ -12,6 +12,10 @@ if(CONFIG_ENABLE_BME280)
     list(APPEND srcs "bme280.c")
 endif()
 
+if(CONFIG_ENABLE_INA219)
+    list(APPEND srcs "ina219.c")
+endif()
+
 if(CONFIG_ENABLE_GPS)
     list(APPEND srcs "gps_sensor.c")
 endif()

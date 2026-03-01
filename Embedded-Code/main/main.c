@@ -43,6 +43,10 @@
 #include "bme280.h"
 #endif
 
+#if CONFIG_ENABLE_INA219
+#include "ina219.h"
+#endif
+
 #if CONFIG_ENABLE_GPS
 #include "gps.h"
 #endif
@@ -272,6 +276,13 @@ void app_main(void)
         register_sensor(&bme280_driver);
     else
         ESP_LOGW(TAG, "BME280 init failed — skipping");
+#endif
+
+#if CONFIG_ENABLE_INA219
+    if (ina219_init(bus) == ESP_OK)
+        register_sensor(&ina219_driver);
+    else
+        ESP_LOGW(TAG, "INA219 init failed — skipping");
 #endif
 
 #if CONFIG_ENABLE_GPS
