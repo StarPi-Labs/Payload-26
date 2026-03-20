@@ -26,6 +26,7 @@ static const char *TAG = "mpu6050";
 #define REG_ACCEL_XOUT_H        0x3B   /* Start of 14-byte burst read */
 #define REG_PWR_MGMT_1          0x6B
 #define REG_WHO_AM_I            0x75
+#define VAL_WHO_AM_I            0x68
 
 #define MPU6050_DATA_LEN        14     /* accel(6) + temp(2) + gyro(6) */
 
@@ -33,31 +34,38 @@ static i2c_master_dev_handle_t s_dev = NULL;
 
 /* ── Public API ───────────────────────────────────────────── */
 
-esp_err_t mpu6050_init(i2c_master_bus_handle_t bus)
+esp_err_t mpu6050_init(i2c_master_bus_handle_t bus) {
+    /* Bind Device to the i2c bus */
+    esp_err_t ret = i2c_bind(bus, &s_dev, MPU6050_ADDR);
+
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Fail to bind MPU6050 to I2C bus: %s", esp_err_to_name(ret));
+        return ret;
+    }
+
+    /* Ping device */
+    uint8_t sensor_id = 0;
+    ret = i2c_bus_read_bytes(s_dev, REG_WHO_AM_I, &sensor_id, 1);
+
+    /* Was connection possible? */
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to connect with sensor: %s", esp_err_to_name(ret));
+        return ret;
+    }
+
+    /* Is it the right sensor? */
+    if (sensor_id != VAL_WHO_AM_I) {
+        ESP_LOGE(TAG, "Wrong Sensor: Expected 0x%02X, got 0x%02X", VAL_WHO_AM_I, sensor_id);
+        return ESP_ERR_INVALID_RESPONSE;
+    }
+
+    return ret;
+}
+
+esp_err_t mpu6050_config(void)
 {
-    /* Add device to bus */
-    i2c_device_config_t dev_cfg = {
-        .dev_addr_length = I2C_ADDR_BIT_LEN_7,
-        .device_address  = MPU6050_ADDR,
-        .scl_speed_hz    = I2C_MASTER_FREQ_HZ,
-    };
-    esp_err_t ret = i2c_master_bus_add_device(bus, &dev_cfg, &s_dev);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to add MPU6050 to I2C bus: %s", esp_err_to_name(ret));
-        return ret;
-    }
-
-    /* Verify WHO_AM_I (expected 0x68) */
-    uint8_t who = 0;
-    ret = i2c_bus_read_bytes(s_dev, REG_WHO_AM_I, &who, 1);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "WHO_AM_I read failed: %s", esp_err_to_name(ret));
-        return ret;
-    }
-    ESP_LOGI(TAG, "WHO_AM_I = 0x%02X", who);
-
     /* Wake up (clear SLEEP bit) and use internal 8 MHz oscillator */
-    ret = i2c_bus_write_byte(s_dev, REG_PWR_MGMT_1, 0x00);
+    esp_err_t ret = i2c_bus_write_byte(s_dev, REG_PWR_MGMT_1, 0x00);
     if (ret != ESP_OK) return ret;
 
     /* Sample rate divider: ODR = 1 kHz / (1 + div).  div=0 → 1 kHz */

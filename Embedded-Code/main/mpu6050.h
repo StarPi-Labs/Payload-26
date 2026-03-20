@@ -8,10 +8,16 @@
 #include "sensor_config.h"
 
 /**
- * Initialise MPU6050: wake it up and set default full-scale ranges.
- * Adds the device to the shared I2C bus.
+ * Initialise MPU6050:
+ * - Binds I2C
+ * - Pings Device
  */
 esp_err_t mpu6050_init(i2c_master_bus_handle_t bus);
+
+/**
+ * wake it up and set default full-scale ranges.
+ */
+esp_err_t mpu6050_config(void);
 
 /**
  * Read 14 raw bytes: accel XYZ (6) + temp (2) + gyro XYZ (6).

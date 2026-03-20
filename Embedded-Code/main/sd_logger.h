@@ -14,6 +14,7 @@
  * @return ESP_OK on success.
  */
 esp_err_t sd_logger_init(const char *csv_header);
+esp_err_t sd_card_init();
 
 /**
  * Get the open file handle for direct fprintf() calls.

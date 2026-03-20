@@ -29,6 +29,7 @@ static const char *TAG = "ina219";
 #define REG_POWER               0x03
 #define REG_CURRENT             0x04
 #define REG_CALIBRATION         0x05
+#define VAL_DEFAULT_CONFIG      0x399F
 
 /* Configuration register bits */
 #define CONFIG_RESET            (1 << 15)
@@ -88,20 +89,50 @@ static esp_err_t ina219_read_reg16(uint8_t reg, uint16_t *value)
     return ret;
 }
 
-esp_err_t ina219_init(i2c_master_bus_handle_t bus)
-{
-    i2c_device_config_t dev_cfg = {
-        .dev_addr_length = I2C_ADDR_BIT_LEN_7,
-        .device_address  = INA219_ADDR,
-        .scl_speed_hz    = I2C_MASTER_FREQ_HZ,
-    };
-    
-    esp_err_t ret = i2c_master_bus_add_device(bus, &dev_cfg, &s_dev);
+esp_err_t ina219_init(i2c_master_bus_handle_t bus) {
+    esp_err_t ret = i2c_bind(bus, &s_dev, INA219_ADDR);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to add INA219: %s", esp_err_to_name(ret));
+    }
+    return ret;
+
+    /**
+     * Funny thing, this device doesn't have an any id register
+     * but on POWER-ON the configuration is fixed 0x399F, we are
+     * exploiting that, and in case the ESP32 failed due to anything
+     * but the INA219 didn't, the we have to force a device reset.
+     * (no worries about the bus, if it got stuck, in the configuration
+     * bus it got bit-banged)
+     */
+
+    /* Ping device */
+    /* 1. Reset the device */
+    ret = ina219_write_reg16(REG_CONFIG, CONFIG_RESET);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to connect with sensor, reset failed: %s", esp_err_to_name(ret));
+        return ret;
+    }
+    vTaskDelay(pdMS_TO_TICKS(1)); /* TODO: check, is it ok 1 or better 2 
+                                     Wait for reset */
+
+    /* 2. Read default configuration */
+    uint16_t config_default = 0;
+    ret = ina219_read_reg16(REG_CONFIG, &config_default);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to read default configuration: %s", esp_err_to_name(ret));
         return ret;
     }
 
+    /* 3. Is it the default value though? */
+    if (config_default != VAL_DEFAULT_CONFIG) {
+        ESP_LOGE(TAG, "Wrong Sensor or device damanged: Expected 0x%04X, got 0x%04X", VAL_DEFAULT_CONFIG, config_default);
+        return ESP_ERR_INVALID_RESPONSE;
+    }
+    return ret;
+}
+
+esp_err_t ina219_config(void)
+{
     /* Reset the device */
     ret = ina219_write_reg16(REG_CONFIG, CONFIG_RESET);
     if (ret != ESP_OK) {
@@ -167,6 +198,13 @@ esp_err_t ina219_read(uint8_t *out_data)
     return ESP_OK;
 }
 
+/* -----------------------------------------------
+ * THIS SECTION DOESN'T HAVE TO BE RUN AT RUNTIME
+ * WE ONLY NEED RAW DATA, THIS CAN BE DONE EITHER
+ * ON POST-PROCESSING OR UPON RECEPTION DURING 
+ * HEALTH MONITORING.
+ * -----------------------------------------------
+ */
 int32_t ina219_get_shunt_voltage_uv(const uint8_t *data)
 {
     /* Shunt voltage is signed 16-bit, LSB = 10 µV */
@@ -194,6 +232,10 @@ int32_t ina219_get_current_ua(const uint8_t *data)
     int16_t raw = (int16_t)(((uint16_t)data[6] << 8) | data[7]);
     return (int32_t)raw * CURRENT_LSB_UA;
 }
+/* -----------------------------------------------
+ * END OF POST-PROCESSING SECTION
+ * -----------------------------------------------
+ */
 
 const sensor_driver_t ina219_driver = {
     .name     = "INA219",

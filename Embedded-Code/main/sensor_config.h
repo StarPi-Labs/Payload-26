@@ -19,18 +19,24 @@
 
 /* ──────────────────────────────────────────────────────────
  *  Pin Assignments  (override these in Kconfig if needed)
+ *  The advatange of these is that the pins can be modified
+ *  here without the need of modifying the Kconfig for fast 
+ *  debuggin or test, it also allows easy visibility in the 
+ *  mapping without hardcoding the drivers to specific pins
  * ────────────────────────────────────────────────────────── */
+// MPU6050
+#define MPU6050_SDA             CONFIG_I2C0_MASTER_SDA
+#define MPU6050_SCL             CONFIG_I2C0_MASTER_SCL
 
-// I2C
-#define PIN_I2C_SDA             CONFIG_I2C_MASTER_SDA
-#define PIN_I2C_SCL             CONFIG_I2C_MASTER_SCL
-#define I2C_MASTER_FREQ_HZ      CONFIG_I2C_MASTER_FREQUENCY
+// BME680/INA219
+#define BME_INA_SDA             CONFIG_I2C1_MASTER_SDA
+#define BME_INA_SCL             CONFIG_I2C1_MASTER_SCL
 
 // GPS UART
 #define GPS_UART_NUM            UART_NUM_2
-#define PIN_GPS_TX              CONFIG_GPS_TXD_PIN
-#define PIN_GPS_RX              CONFIG_GPS_RXD_PIN
-#define GPS_BAUD_RATE           CONFIG_GPS_BAUD_RATE
+#define GPS_TX                  CONFIG_GPS_TXD_PIN
+#define GPS_RX                  CONFIG_GPS_RXD_PIN
+#define GPS_BAUD                CONFIG_GPS_BAUD_RATE
 
 // SD Card (SDMMC 1-bit mode)
 #define PIN_SD_CLK              CONFIG_SD_CLK_PIN
@@ -54,3 +60,10 @@ typedef struct {
 
 /** Maximum number of sensor drivers that can be registered */
 #define MAX_SENSORS  8
+
+/* ──────────────────────────────────────────────────────────
+ *  Sensor specific
+ * ────────────────────────────────────────────────────────── */
+
+
+

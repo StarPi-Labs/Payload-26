@@ -60,6 +60,7 @@ static void gps_rx_task(void *arg)
 
 esp_err_t gps_init(i2c_master_bus_handle_t bus)
 {
+    // TODO: THIS IS SERIAL-Initialization
     (void)bus;  /* GPS doesn't use I2C */
 
     const uart_config_t uart_cfg = {
@@ -88,6 +89,9 @@ esp_err_t gps_init(i2c_master_bus_handle_t bus)
 
 void gps_start_task(void)
 {
+    /* This task needs to be pined to one core, only, far from i2c devices,
+     * the slow core is ok
+     */
     xTaskCreate(gps_rx_task, "gps_rx", 4096, NULL, 5, NULL);
 }
 

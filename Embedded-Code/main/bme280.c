@@ -7,8 +7,9 @@
  *   temp_msb(1)  temp_lsb(1)  temp_xlsb(1)
  *   hum_msb(1)   hum_lsb(1)
  *
- * TODO: Add compensation formulas from the BME280 datasheet for
+ * TODO: (POST-PROCESSING) Add compensation formulas from the BME280 datasheet for
  *       calibrated temperature (°C), pressure (Pa), humidity (%RH).
+ *       
  */
 
 #include "bme280.h"
@@ -19,6 +20,7 @@ static const char *TAG = "bme280";
 
 #define BME280_ADDR         0x76
 #define REG_CHIP_ID         0xD0    /* Expected: 0x60 */
+
 #define REG_CTRL_HUM        0xF2
 #define REG_CTRL_MEAS       0xF4
 #define REG_CONFIG           0xF5
@@ -28,19 +30,18 @@ static const char *TAG = "bme280";
 
 static i2c_master_dev_handle_t s_dev = NULL;
 
-esp_err_t bme280_init(i2c_master_bus_handle_t bus)
-{
-    i2c_device_config_t dev_cfg = {
-        .dev_addr_length = I2C_ADDR_BIT_LEN_7,
-        .device_address  = BME280_ADDR,
-        .scl_speed_hz    = I2C_MASTER_FREQ_HZ,
-    };
-    esp_err_t ret = i2c_master_bus_add_device(bus, &dev_cfg, &s_dev);
-    if (ret != ESP_OK) {
+esp_err_t bme280_bind(i2c_master_bus_handle_t bus) {
+    esp_err_t ret = i2c_bind(bus, &s_dev, BME280_ADDR);
+
+    if (ret != ESP_OK){
         ESP_LOGE(TAG, "Failed to add BME280: %s", esp_err_to_name(ret));
-        return ret;
     }
 
+    return ret;
+}
+
+esp_err_t bme280_init(i2c_master_bus_handle_t bus)
+{
     /* Verify chip ID */
     uint8_t id = 0;
     ret = i2c_bus_read_bytes(s_dev, REG_CHIP_ID, &id, 1);

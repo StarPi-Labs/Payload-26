@@ -39,8 +39,8 @@
 #include "mpu6050.h"
 #endif
 
-#if CONFIG_ENABLE_BME280
-#include "bme280.h"
+#if CONFIG_ENABLE_BME680
+#include "bme680.h"
 #endif
 
 #if CONFIG_ENABLE_INA219
@@ -280,45 +280,187 @@ static void task_sd_write(void *arg)
 /* ═══════════════════════════════════════════════════════════
  *  app_main
  * ═══════════════════════════════════════════════════════════ */
+#define I2C0_HEALTH         15
+#define I2C1_HEALTH         14
+#define GPS_UART_HEALTH     13
+#define LORA_UART_HEALTH    12
+#define SD_HEALTH           11
 
-void app_main(void)
-{
+#define MPU6050_HEALTH      7
+#define BME680_HEALTH       6
+#define INA219_HEALTH       5
+#define GPS_HEALTH          4
+#define LORA_HEALTH         3
+#define FILESYSTEM_HEALTH   2
+#define BATTERY_HEALTH      1
+
+typedef struct {
+    uint32_t lauch_timestamp;
+    uint16_t flight_state;
+    uint16_t boot_count;
+} FlightRecord;
+
+RTC_DATA_ATTR FlightRecord global_flight_record;
+
+typedef struct {
+    i2c_master_bus_handle_t bus_mpu6050;
+    i2c_master_bus_handle_t bus_bme_ina;
+    uint16_t health; /* LSB: Devices health
+                      * MSB: Peripherals health*/
+    FlightRecord *record;
+} System;
+
+void sys_init(System *sys) {
+    sys->record = &global_flight_record;
+    esp_reset_reason_t reason = esp_reset_reason();
+
+    if (reason == ESP_RST_POWERON) {
+        memset(sys->record, 0, sizeof(FlightRecord));
+    } else {
+        esp_log_level_set("*", ESP_LOG_NONE);   /* Kill logs, no need if we are 
+                                                 * in flight. 
+                                                 * TODO: this needs to be improved:
+                                                 * - kill if we are above boost mode
+                                                 * - or ESP_RST_WDT
+                                                 * - or ESP_RST_PANIC 
+                                                 * - or ESP_RST_BROWNOUT (we can set up, how low the voltage can trigger).
+                                                 */
+        sys->record->boot_count++;
+    }
+    /* NOTE: This is nice if we are plugged, but if it fails mid flight then
+     * printing all of LOGES/LOGIS is a waster of time. */
     ESP_LOGI(TAG, "╔══════════════════════════════════╗");
     ESP_LOGI(TAG, "║     Star-PI Payload  v2.0        ║");
     ESP_LOGI(TAG, "╚══════════════════════════════════╝");
+    
+    esp_err_t err;
+    sys->health = 0;  /* Everything starts unhealthy */
 
     /* ── 1. I2C bus (shared by all I2C sensors) ──────────── */
 #if CONFIG_ENABLE_I2C_BUS
-    ESP_ERROR_CHECK(i2c_bus_init());
-    i2c_master_bus_handle_t bus = i2c_bus_get_handle();
+    err = sys_i2c0_init(MPU6050_SDA, MPU6050_SCL);
+    if (ESP_OK == err) {
+        sys->health |= 1 << I2C0_HEALTH;
+        sys->bus_mpu6050 = i2c_bus0_get_handle();
+    }
+
+    err = sys_i2c1_init(BME_INA_SDA, BME_INA_SCL);
+    if (ESP_OK == err) {
+        sys->health |= 1 << I2C1_HEALTH;
+        sys->bus_bme_ina = i2c_bus1_get_handle();
+    }
 #endif
 
-    /* ── 2. Register enabled sensors ─────────────────────── */
-#if CONFIG_ENABLE_MPU6050
-    if (mpu6050_init(bus) == ESP_OK)
-        register_sensor(&mpu6050_driver);
-    else
-        ESP_LOGW(TAG, "MPU6050 init failed — skipping");
+#if CONFIG_ENABLE_GPS
+    err = sys_uart_init(GPS_UART, GPS_BAUD, GPS_TX, GPS_RX, 0, GPS_RX_BUF_SZ);
+    sys->health |= (err == ESP_OK) << GPS_UART_HEALTH;
 #endif
 
-#if CONFIG_ENABLE_BME280
-    if (bme280_init(bus) == ESP_OK)
-        register_sensor(&bme280_driver);
-    else
-        ESP_LOGW(TAG, "BME280 init failed — skipping");
+#if CONFIG_ENABLE_LORA
+    // TODO: define this variables for LoRA
+    err = sys_uart_init(LORA_UART, LORA_BAUD, LORA_TX_PIN, LORA_RX_PIN, LORA_TX_BUF, 0);
+    sys->health |= (err == ESP_OK) << LORA_UART_HEALTH;
+#endif
+
+#if CONFIG_ENABLE_SD_CARD
+    // TODO: maybe this function is not declared anywhere, so we should implement it.
+    err = sys_sd_card_init(SD_CLK, SD_CMD, SD_D0);
+    sys->health |= (err == ESP_OK) << SD_HEALTH;
+#endif
+
+    /* Go/No-Go */
+    if (!sys->health) {
+        ESP_LOGE(TAG, "Hardware/Driver Dead. Aborting");
+        abort();
+    }
+}
+
+void sys_POST(System *sys){
+    /**
+     * Power-On Self-Test
+     * ------------------
+     *  Bind and ping devices
+     */
+    
+    if (sys->health & (1 << I2C0_HEALTH)) {
+        if (ESP_OK == mpu6050_init(sys->bus_mpu6050)) sys->health |= (1 << MPU6050_HEALTH);
+    }
+
+    if (sys->health & (1 << I2C1_HEALTH)) {
+#if CONFIG_ENABLE_BME680
+        if (ESP_OK == bme680_init(sys->bus_bme_ina)) sys->health |= (1 << BME680_HEALTH);
 #endif
 
 #if CONFIG_ENABLE_INA219
-    if (ina219_init(bus) == ESP_OK)
-        register_sensor(&ina219_driver);
-    else
-        ESP_LOGW(TAG, "INA219 init failed — skipping");
+        if (ESP_OK == ina219_init(sys->bus_bme_ina)) sys->health |= (1 << INA219_HEALTH);
 #endif
+    }
+
+#if CONFIG_ENABLE_GPS
+    if (sys->health & (1 << GPS_UART_HEALTH)) {
+        if (ESP_OK == gps_init()) {
+            sys->health |= (1 << GPS_HEALTH);
+            // TODO:
+            // - pin gps_start_task() to the slowest core.
+            // - the task should parse the NMEA senteces as well.
+        }
+    }
+#endif
+
+#if CONFIG_ENABLE_SD_CARD
+    if (sys->health & (1 << SD_HEALTH)) {
+        // TODO:    frame_logger_init, might need a different name, and it would 
+        //          only initiate the file itself where the thing will be stored.
+        if (ESP_OK == frame_logger_init()) sys->health |= (1 << FILESYSTEM_HEALTH);
+    }
+#endif
+    /* Go/No-Go */
+    // TODO: defined minimun required to flight
+    uint16_t required = (1 << I2C0_HEALTH) | (1 << MPU6050_HEALTH);
+    if ((sys->health & required) != required) {
+        ESP_LOGE(TAG, "POST FATAL : critical hardware missing. Health: 0x%04X.", sys->health);
+        /* NOTE: I think if all devices fails it's better to get stuck here in a loop*/
+        while(1);
+        /* Optionally: we can abort and hope that the reboot fix things, sometimes 
+         * from scratch reboot can solve things hehe, in that case, invoke abort().
+         * abort(); // reason triggered: ESP_RST_PANIC
+         */
+    }
+
+}
+
+
+void app_main(void)
+{   
+    System sys;
+    sys_init(&sys);
+    sys_POST(&sys);
+
+    // TODO: SENSOR-CHECK, 
+    //      - manual buttom to check if all sensors are ok.
+    //      - This only happens when we are doing COLD start
+    //      - upon all sensors checked, go armed state
+    // TODO: IDLE/ARMED:
+    //      - Health monitoring, sending small packets through LoRA every 30 seconds or so
+    //      - A failure here triggers a WARM start: 
+    //        * sys_init and sys_POST are performed
+    //        * SENSOR-CHECK is skipped because it requires a manual thing.
+    //      - (opt.) Remote Sensor banning, since we can visually see if the sensor is failing.
+    //               This will require parsing data from LoRA (advanced).
+    // TODO: BOOST:
+    //      - LoRA OFF
+    //      - A failure here triggers a HOT start:
+    //        * sys_init() 
+    //        * sys_POST() might be ingored depending on the failure, if it was a powere failure, then
+    // TODO: COAST:
+    //      - Change accelerometer range
+    // TODO: TURN-OFF PROCEDURE (just if we use NVS). Physical button? command? 
 
 #if CONFIG_ENABLE_GPS
     if (gps_init(NULL) == ESP_OK) {
         register_sensor(&gps_driver);
-        gps_start_task();
+        // TODO: 
+        //  TASK: gps_start_task() should be pined to a slowest core
     } else {
         ESP_LOGW(TAG, "GPS init failed — skipping");
     }

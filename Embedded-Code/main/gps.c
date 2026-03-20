@@ -14,11 +14,33 @@
 #define GPS_RXD_PIN      (17)
 #define BLUE_LED_PIN     (2)          // D2 (GPIO2) for blue LED
 
+#define TIMEOUT_INIT    20
+#define TAG             "GPS"
+
 void blink_led()
 {
     gpio_set_level(BLUE_LED_PIN, 1);
     vTaskDelay(50 / portTICK_PERIOD_MS);
     gpio_set_level(BLUE_LED_PIN, 0);
+}
+
+esp_err_t gps_init(void) {
+    uint8_t data[BUF_SIZE];
+    int len;
+    
+    while (1) {
+        len = uart_read_bytes(UART_GPS_NUM, data, BUF_SIZE, TIMEOUT_INIT / portTICK_PERIOD_MS);
+        if (len < 0) {
+            ESP_LOGE(TAG, "Nothing received in the UART PORT, timeout.");
+            return ESP_ERR_TIMEOUT;
+        }
+        // TODO: Wait for any NMEA sentence of interest. 
+        // if no NMEA sentence arrives,
+        // ESP_LOGE(TAG, "Received reponsed was invalid.)
+        // return ESP_ERR_INVALID_RESPONSE;
+        blink_led();
+    }
+    return ESP_OK;
 }
 
 void uart_init()

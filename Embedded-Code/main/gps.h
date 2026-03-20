@@ -16,7 +16,7 @@
 /**
  * Initialise GPS UART. The `bus` parameter is ignored (GPS uses UART, not I2C).
  */
-esp_err_t gps_init(i2c_master_bus_handle_t bus);
+esp_err_t gps_init(void);
 
 /**
  * Read the latest buffered NMEA line into out_data.

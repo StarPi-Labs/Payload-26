@@ -20,6 +20,7 @@
  * Configures 32V bus range, ±320mV shunt, 12-bit resolution.
  */
 esp_err_t ina219_init(i2c_master_bus_handle_t bus);
+esp_err_t ina219_config(void);
 
 /**
  * Read raw data: shunt voltage, bus voltage, power, current (8 bytes).
