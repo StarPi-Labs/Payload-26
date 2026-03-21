@@ -6,15 +6,15 @@
 #pragma once
 
 #include "esp_err.h"
+#include "driver/uart.h"
+#include "driver/gpio.h"
 
-typedef struct {
-    uart_port_t port;
-    int boudrate;
-    int tx_pin;
-    int rx_pin;
-    int rx_buffer_sz;
-} small_uart_cfg_t;
-
-esp_err_t sys_uart_init(
-    small_uart_cfg_t ucfg
+esp_err_t 
+sys_uart_init (
+    uart_port_t port, 
+    int baud, 
+    gpio_num_t tx_pin, 
+    gpio_num_t rx_pin, 
+    int tx_buf_sz, 
+    int rx_buf_sz
 );

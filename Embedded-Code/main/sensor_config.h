@@ -33,10 +33,11 @@
 #define BME_INA_SCL             CONFIG_I2C1_MASTER_SCL
 
 // GPS UART
-#define GPS_UART_NUM            UART_NUM_2
+#define GPS_UART                UART_NUM_2
 #define GPS_TX                  CONFIG_GPS_TXD_PIN
 #define GPS_RX                  CONFIG_GPS_RXD_PIN
 #define GPS_BAUD                CONFIG_GPS_BAUD_RATE
+#define GPS_RX_BUF_SZ           1024
 
 // SD Card (SDMMC 1-bit mode)
 #define PIN_SD_CLK              CONFIG_SD_CLK_PIN

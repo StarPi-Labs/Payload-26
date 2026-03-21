@@ -19,7 +19,8 @@
 
 static const char *TAG = "gps";
 
-#define UART_BUF_SIZE   1024
+#define BUF_SIZE        1024
+#define TIMEOUT_INIT    20
 
 /* Double-buffered latest NMEA sentence */
 static uint8_t  s_sentence[GPS_MAX_SENTENCE_LEN];
@@ -37,7 +38,7 @@ static void gps_rx_task(void *arg)
     ESP_LOGI(TAG, "GPS RX task running");
 
     while (1) {
-        int len = uart_read_bytes(GPS_UART_NUM, &byte, 1, pdMS_TO_TICKS(100));
+        int len = uart_read_bytes(GPS_UART, &byte, 1, pdMS_TO_TICKS(100));
         if (len <= 0) continue;
 
         if (byte == '\n' || byte == '\r') {
@@ -58,33 +59,83 @@ static void gps_rx_task(void *arg)
 
 /* ── Public API ───────────────────────────────────────────── */
 
-esp_err_t gps_init(i2c_master_bus_handle_t bus)
-{
-    // TODO: THIS IS SERIAL-Initialization
-    (void)bus;  /* GPS doesn't use I2C */
+//esp_err_t gps_init(i2c_master_bus_handle_t bus)
+//{
+//    // TODO: THIS IS SERIAL-Initialization
+//    (void)bus;  /* GPS doesn't use I2C */
+//
+//    const uart_config_t uart_cfg = {
+//        .baud_rate  = GPS_BAUD_RATE,
+//        .data_bits  = UART_DATA_8_BITS,
+//        .parity     = UART_PARITY_DISABLE,
+//        .stop_bits  = UART_STOP_BITS_1,
+//        .flow_ctrl  = UART_HW_FLOWCTRL_DISABLE,
+//        .source_clk = UART_SCLK_DEFAULT,
+//    };
+//
+//    esp_err_t ret = uart_param_config(GPS_UART_NUM, &uart_cfg);
+//    if (ret != ESP_OK) return ret;
+//
+//    ret = uart_set_pin(GPS_UART_NUM, PIN_GPS_TX, PIN_GPS_RX,
+//                       UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
+//    if (ret != ESP_OK) return ret;
+//
+//    ret = uart_driver_install(GPS_UART_NUM, UART_BUF_SIZE * 2, 0, 0, NULL, 0);
+//    if (ret != ESP_OK) return ret;
+//
+//    ESP_LOGI(TAG, "GPS UART%d ready  TX=%d RX=%d  %d baud",
+//             GPS_UART_NUM, PIN_GPS_TX, PIN_GPS_RX, GPS_BAUD_RATE);
+//    return ESP_OK;
+//}
 
-    const uart_config_t uart_cfg = {
-        .baud_rate  = GPS_BAUD_RATE,
-        .data_bits  = UART_DATA_8_BITS,
-        .parity     = UART_PARITY_DISABLE,
-        .stop_bits  = UART_STOP_BITS_1,
-        .flow_ctrl  = UART_HW_FLOWCTRL_DISABLE,
-        .source_clk = UART_SCLK_DEFAULT,
-    };
+#define ABSOLUTE_ATTEMPTS   1024        // Number of attempts including returned 
+                                        // read bytes being 0, this depends on 
+                                        // the number of NMEA sentences we are 
+                                        // having.
 
-    esp_err_t ret = uart_param_config(GPS_UART_NUM, &uart_cfg);
-    if (ret != ESP_OK) return ret;
+#define MIN_NMEA            "$GNRMC"    // According to the doc, we only need:
+                                        // - $GNRMC
+                                        // - $GNGGA
+                                        //
+                                        // Remember we are using this onnly to 
+                                        // see if the GPS is alive.
 
-    ret = uart_set_pin(GPS_UART_NUM, PIN_GPS_TX, PIN_GPS_RX,
-                       UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
-    if (ret != ESP_OK) return ret;
+esp_err_t gps_init(uart_port_t port) {
+    uint8_t data[BUF_SIZE] = {0};
+    const char required_min_NMEA[] = MIN_NMEA;
+    uint8_t attempts;
+    int len, i, j, min_NMEA_len;
 
-    ret = uart_driver_install(GPS_UART_NUM, UART_BUF_SIZE * 2, 0, 0, NULL, 0);
-    if (ret != ESP_OK) return ret;
+    j = 0;
+    min_NMEA_len = strlen(required_min_NMEA);
 
-    ESP_LOGI(TAG, "GPS UART%d ready  TX=%d RX=%d  %d baud",
-             GPS_UART_NUM, PIN_GPS_TX, PIN_GPS_RX, GPS_BAUD_RATE);
-    return ESP_OK;
+    for (attempts = 0; attempts < ABSOLUTE_ATTEMPTS; attempts++) {
+        len = uart_read_bytes(port, data, BUF_SIZE, TIMEOUT_INIT / portTICK_PERIOD_MS);
+
+        if (len < 0) {
+
+            ESP_LOGE(TAG, "Nothing received in the UART PORT, timeout.");
+            return ESP_ERR_TIMEOUT;
+
+        } else if (len > 0) {
+
+            for (i = 0; i < len; i++) {
+
+                if (required_min_NMEA[j] == data[i]) {
+                    j++;
+                } else {
+                    j = 0;
+                }
+
+                if (min_NMEA_len == j)
+                    return ESP_OK;
+
+                data[i] = 0;
+            }
+        }
+    }
+
+    return ESP_ERR_INVALID_RESPONSE;
 }
 
 void gps_start_task(void)
@@ -110,6 +161,6 @@ esp_err_t gps_read(uint8_t *out_data)
 const sensor_driver_t gps_driver = {
     .name     = "GPS",
     .data_len = GPS_MAX_SENTENCE_LEN,
-    .init     = gps_init,
+    .init     = NULL, // gps_init,
     .read     = gps_read,
 };

@@ -8,7 +8,9 @@
 
 #pragma once
 
+#include "driver/uart.h"
 #include "sensor_config.h"
+
 
 /** Max NMEA sentence length (spec says 82 chars including CR LF) */
 #define GPS_MAX_SENTENCE_LEN   128
@@ -16,7 +18,7 @@
 /**
  * Initialise GPS UART. The `bus` parameter is ignored (GPS uses UART, not I2C).
  */
-esp_err_t gps_init(void);
+esp_err_t gps_init(uart_port_t port);
 
 /**
  * Read the latest buffered NMEA line into out_data.

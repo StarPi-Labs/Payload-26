@@ -14,7 +14,7 @@
 #include "i2c_bus.h"
 #include "esp_log.h"
 
-static const char *TAG = "mpu6050";
+static const char *TAG = "MPU6050";
 
 /* ── Register map ─────────────────────────────────────────── */
 #define MPU6050_ADDR            0x68

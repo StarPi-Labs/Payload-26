@@ -17,7 +17,7 @@ if(CONFIG_ENABLE_INA219)
 endif()
 
 if(CONFIG_ENABLE_GPS)
-    list(APPEND srcs "gps_sensor.c")
+    list(APPEND srcs "gps_sensor.c" "uart.c")
 endif()
 
 # Frame logger is always compiled (frame building types needed)

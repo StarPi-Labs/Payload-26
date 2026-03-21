@@ -48,6 +48,7 @@
 #endif
 
 #if CONFIG_ENABLE_GPS
+#include "uart.h"
 #include "gps.h"
 #endif
 
@@ -55,6 +56,39 @@
 #include "frame_logger.h"
 
 static const char *TAG = "main";
+
+/*--- System ---*/
+#define I2C0_HEALTH         15
+#define I2C1_HEALTH         14
+#define GPS_UART_HEALTH     13
+#define LORA_UART_HEALTH    12
+#define SD_HEALTH           11
+
+#define MPU6050_HEALTH      7
+#define BME680_HEALTH       6
+#define INA219_HEALTH       5
+#define GPS_HEALTH          4
+#define LORA_HEALTH         3
+#define FILESYSTEM_HEALTH   2
+#define BATTERY_HEALTH      1
+#define SENSORS_HEALTH      ((1 << MPU6050_HEALTH) | (1 << BME680_HEALTH) | (1 << INA219_HEALTH) | (1 << GPS_HEALTH))
+
+typedef struct {
+    uint32_t lauch_timestamp;
+    uint16_t flight_state;
+    uint16_t boot_count;
+} FlightRecord;
+
+RTC_DATA_ATTR FlightRecord global_flight_record;
+
+typedef struct {
+    i2c_master_bus_handle_t bus_mpu6050;
+    i2c_master_bus_handle_t bus_bme_ina;
+    uint16_t health; /* LSB: Devices health
+                      * MSB: Peripherals health*/
+    FlightRecord *record;
+} System;
+
 
 /* ═══════════════════════════════════════════════════════════
  *  Sensor registry — filled at boot from enabled drivers
@@ -143,6 +177,7 @@ static size_t ring_buffer_read(uint8_t *dst, size_t max_len)
 
 static void task_sensor_read(void *arg)
 {
+    System *sys = (System *) arg;
     ESP_LOGI(TAG, "Sensor task running on core %d", xPortGetCoreID());
 
     uint16_t frame_id = 0;
@@ -159,7 +194,7 @@ static void task_sensor_read(void *arg)
 
         /* MPU6050: Accelerometer + Gyroscope + Temperature */
 #if CONFIG_ENABLE_MPU6050
-        {
+        if (sys->health & (1 << MPU6050_HEALTH)) {
             uint8_t mpu_data[14];
             esp_err_t ret = mpu6050_read(mpu_data);
             if (ret == ESP_OK) {
@@ -179,8 +214,8 @@ static void task_sensor_read(void *arg)
 #endif
 
         /* BME280: Pressure + Temperature + Humidity */
-#if CONFIG_ENABLE_BME280
-        {
+#if CONFIG_ENABLE_BME680
+        if (sys->health & (1 << BME680_HEALTH)) {
             uint8_t bme_data[8];
             esp_err_t ret = bme280_read(bme_data);
             if (ret == ESP_OK) {
@@ -204,7 +239,7 @@ static void task_sensor_read(void *arg)
 
         /* INA219: Power monitor data */
 #if CONFIG_ENABLE_INA219
-        {
+        if (sys->health & (1 << INA219_HEALTH)) {
             uint8_t ina_data[8];
             esp_err_t ret = ina219_read(ina_data);
             if (ret == ESP_OK) {
@@ -217,7 +252,7 @@ static void task_sensor_read(void *arg)
 
         /* GPS: Raw NMEA data */
 #if CONFIG_ENABLE_GPS
-        {
+        if (sys->health & (1 << GPS_HEALTH)) {
             uint8_t gps_data[GPS_MAX_SENTENCE_LEN];
             esp_err_t ret = gps_read(gps_data);
             if (ret == ESP_OK) {
@@ -280,36 +315,6 @@ static void task_sd_write(void *arg)
 /* ═══════════════════════════════════════════════════════════
  *  app_main
  * ═══════════════════════════════════════════════════════════ */
-#define I2C0_HEALTH         15
-#define I2C1_HEALTH         14
-#define GPS_UART_HEALTH     13
-#define LORA_UART_HEALTH    12
-#define SD_HEALTH           11
-
-#define MPU6050_HEALTH      7
-#define BME680_HEALTH       6
-#define INA219_HEALTH       5
-#define GPS_HEALTH          4
-#define LORA_HEALTH         3
-#define FILESYSTEM_HEALTH   2
-#define BATTERY_HEALTH      1
-
-typedef struct {
-    uint32_t lauch_timestamp;
-    uint16_t flight_state;
-    uint16_t boot_count;
-} FlightRecord;
-
-RTC_DATA_ATTR FlightRecord global_flight_record;
-
-typedef struct {
-    i2c_master_bus_handle_t bus_mpu6050;
-    i2c_master_bus_handle_t bus_bme_ina;
-    uint16_t health; /* LSB: Devices health
-                      * MSB: Peripherals health*/
-    FlightRecord *record;
-} System;
-
 void sys_init(System *sys) {
     sys->record = &global_flight_record;
     esp_reset_reason_t reason = esp_reset_reason();
@@ -358,7 +363,7 @@ void sys_init(System *sys) {
 
 #if CONFIG_ENABLE_LORA
     // TODO: define this variables for LoRA
-    err = sys_uart_init(LORA_UART, LORA_BAUD, LORA_TX_PIN, LORA_RX_PIN, LORA_TX_BUF, 0);
+    err = sys_uart_init(LORA_UART, LORA_BAUD, LORA_TX, LORA_RX, LORA_TX_BUF, 0);
     sys->health |= (err == ESP_OK) << LORA_UART_HEALTH;
 #endif
 
@@ -398,11 +403,9 @@ void sys_POST(System *sys){
 
 #if CONFIG_ENABLE_GPS
     if (sys->health & (1 << GPS_UART_HEALTH)) {
-        if (ESP_OK == gps_init()) {
+        if (ESP_OK == gps_init(GPS_UART)) {
             sys->health |= (1 << GPS_HEALTH);
-            // TODO:
-            // - pin gps_start_task() to the slowest core.
-            // - the task should parse the NMEA senteces as well.
+            gps_start_task(); // pin to core 1, APP_CPU
         }
     }
 #endif
@@ -416,7 +419,8 @@ void sys_POST(System *sys){
 #endif
     /* Go/No-Go */
     // TODO: defined minimun required to flight
-    uint16_t required = (1 << I2C0_HEALTH) | (1 << MPU6050_HEALTH);
+    // uint16_t required = (1 << I2C0_HEALTH) | (1 << MPU6050_HEALTH);
+    uint16_t required = 0; // whatever we have is enough so far
     if ((sys->health & required) != required) {
         ESP_LOGE(TAG, "POST FATAL : critical hardware missing. Health: 0x%04X.", sys->health);
         /* NOTE: I think if all devices fails it's better to get stuck here in a loop*/
@@ -456,20 +460,10 @@ void app_main(void)
     //      - Change accelerometer range
     // TODO: TURN-OFF PROCEDURE (just if we use NVS). Physical button? command? 
 
-#if CONFIG_ENABLE_GPS
-    if (gps_init(NULL) == ESP_OK) {
-        register_sensor(&gps_driver);
-        // TODO: 
-        //  TASK: gps_start_task() should be pined to a slowest core
-    } else {
-        ESP_LOGW(TAG, "GPS init failed — skipping");
-    }
-#endif
+    ESP_LOGI(TAG, "System Health 0x%04X", sys.health);
 
-    ESP_LOGI(TAG, "Active sensors: %d", s_num_sensors);
-
-    if (s_num_sensors == 0) {
-        ESP_LOGW(TAG, "No sensors enabled! Enable at least one via menuconfig.");
+    if ((sys.health & SENSORS_HEALTH) == 0) {
+        ESP_LOGW(TAG, "No sensors enabled! Enable at least one via menuconfig. System Health 0x%04X.", sys.health);
     }
 
     /* ── 3. SD card (binary frame logger) ────────────────── */
@@ -485,7 +479,7 @@ void app_main(void)
 
     /* ── 5. Start tasks on separate cores ────────────────── */
     static TaskHandle_t sensor_task_h = NULL;
-    xTaskCreatePinnedToCore(task_sensor_read, "sensor_rd", 4096, NULL, 6, &sensor_task_h, 1);
+    xTaskCreatePinnedToCore(task_sensor_read, "sensor_rd", 4096, (void *)&sys, 6, &sensor_task_h, 1);
 
 #if CONFIG_ENABLE_SD_CARD
     if (sd_ret == ESP_OK) {
