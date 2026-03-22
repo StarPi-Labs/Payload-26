@@ -17,99 +17,282 @@
 
 #include <string.h>
 
-static const char *TAG = "gps";
+static const char *TAG = "GPS";
 
-#define BUF_SIZE        1024
-#define TIMEOUT_INIT    20
+#define BUF_SIZE                1024
+#define TIMEOUT_INIT            20          // Timeout on receiving the dataset
+#define GPS_MAX_INIT_ATTEMPTS   1024        // Number of attempts including returned 
+                                        // read bytes being 0, this depends on 
+                                        // the number of NMEA sentences we are 
+                                        // having.
+
+#define MIN_NMEA                "$xxGGA"    // According to the doc, we only need:
+                                            // - $xxRMC // status the most important
+                                            // - $xxGGA // time, lat and long.
+                                            // where: 'xx' means it could be any two words there.
+                                            // Remember we are using this onnly to 
+                                            // see if the GPS is alive.
+#define MIN_NMEA_SZ             6           // strlen(MIN_NMEA)
+
+
 
 /* Double-buffered latest NMEA sentence */
 static uint8_t  s_sentence[GPS_MAX_SENTENCE_LEN];
 static size_t   s_sentence_len = 0;
 static volatile bool s_new_data = false;
 
-/* ── UART background task ─────────────────────────────────── */
+#define MAX_FAILED_ATTEMPTS     5   // if the GPS' uart fails to read 5 
+                                        // consecutive times, gps is flagged
+                                        // dead.
 
-static void gps_rx_task(void *arg)
-{
+/* SENTENCES OF INTEREST ALREADY RECEIVED */
+enum {
+    RMC_FLAG_SENTENCE,
+    GGA_FLAG_SENTENCE,
+};
+#define NMEA_READY_INFO ((1 << RMC_FLAG_SENTENCE) | (1 << GGA_FLAG_SENTENCE))
+
+/* NMEA PARSING */
+enum {
+    WAIT_SYNC, SKIP_TALKER_1, SKIP_TALKER_2, CHECK_ID_1, CHECK_ID_2, CHECK_ID_3,
+    WAIT_COMMA, PARSE_RMC, PARSE_GGA, IGNORE_LINE
+};
+
+void parse_nmea(struct GPSInfo *gps_info, uint8_t byte) {
+    static uint8_t state = WAIT_SYNC;
+    static uint8_t candidate_state = 0; 
+    static int comma_count = 0;
+    static int char_count = 0;
+
+    if (byte == '$') {
+        state = SKIP_TALKER_1;
+        return;
+    }
+
+
+    switch(state) {
+        case SKIP_TALKER_1:
+            state = SKIP_TALKER_2;
+            break;
+
+        case SKIP_TALKER_2:
+            state = CHECK_ID_1;
+            break;
+
+        case CHECK_ID_1:
+            switch(byte) {
+            case 'R': 
+                candidate_state = PARSE_RMC;
+                state = CHECK_ID_2;
+                break;
+            case 'G':
+                candidate_state = PARSE_GGA;
+                state = CHECK_ID_2;
+                break;
+            default:
+                state = IGNORE_LINE;
+            }
+           break;
+        case CHECK_ID_2:
+            if ((candidate_state == PARSE_RMC && byte == 'M') || 
+                (candidate_state == PARSE_GGA && byte == 'G'))
+                state = CHECK_ID_3;
+            else 
+                state = IGNORE_LINE;
+            break;
+
+        case CHECK_ID_3:
+
+            comma_count = 0;
+            if ((candidate_state == PARSE_RMC && byte == 'C') ||
+                (candidate_state == PARSE_GGA && byte == 'A'))
+                state = WAIT_COMMA;
+            else 
+                state = IGNORE_LINE;
+            break;
+
+        case WAIT_COMMA:
+            if (byte == ',') {
+                state = candidate_state;
+                comma_count = 1;
+            }
+            break;
+
+        case PARSE_RMC:
+
+            if (byte == '*') { 
+                gps_info->available |= 1 << RMC_FLAG_SENTENCE;
+                state = WAIT_SYNC; 
+                return; 
+            }
+
+            if (byte == ',') { 
+                comma_count++; 
+                char_count = 0;
+                return; 
+            }
+
+            // You are now online parsing RMC!
+            switch(comma_count) {
+            case 2: // STATUS
+                gps_info->status = byte;
+                break;
+            case 7: // SPEED
+                gps_info->speed[char_count++] = byte;
+                if (char_count > GPS_SPEED_STR_SZ){ 
+                    // This technique will avoid segmentation faults by 
+                    // avoiding buffer over flow
+                    state = WAIT_SYNC;
+                    return;
+                }
+                break;
+            case 8: // COURSE OF MOVEMENT
+                gps_info->course[char_count++] = byte;
+                if (char_count > GPS_COURSE_STR_SZ) {
+                    state = WAIT_SYNC;
+                    return;
+                }
+                break;
+            }
+            break;
+
+        case PARSE_GGA:
+
+            if (byte == '*') {
+                gps_info->available |= 1 << GGA_FLAG_SENTENCE; 
+                state = WAIT_SYNC; 
+                return;
+            } 
+            if (byte == ',') { 
+                comma_count++; 
+                char_count = 0;
+                return; 
+            }
+
+            // You are now online parsing GGA!
+            switch(comma_count) {
+            case 1: // TIME
+                gps_info->time[char_count++] = byte;
+                if (char_count > GPS_TIME_STR_SZ) {
+                    state = WAIT_SYNC;
+                    return;
+                }
+                break;
+            case 2: // LATITUDE
+                gps_info->lat[char_count++] = byte;
+                if (char_count > GPS_LAT_STR_SZ) {
+                    state = WAIT_SYNC;
+                    return;
+                }
+                break;
+            case 3: // LATITUDE DIR N/S
+                gps_info->lat_orientation = byte;
+                break;
+            case 4: // LONGITUDE
+                gps_info->lon[char_count++] = byte;
+                if (char_count > GPS_LON_STR_SZ) {
+                    state = WAIT_SYNC;
+                    return;
+                }
+                break;
+            case 5: // LONGITUDE DIR W/E
+                gps_info->lon_orientation = byte;
+                break;
+            case 7: // NUMER OF SATELLITES CONNECTED
+                gps_info->sat_count[char_count++] = byte;
+                if (char_count > GPS_SATCOUNT_STR_SZ) {
+                    state = WAIT_SYNC;
+                    return;
+                }
+                break;
+            }
+            break;
+
+        case IGNORE_LINE:
+            // Do absolutely nothing until the next '$' arrives
+            break;
+
+        default:
+            state = WAIT_SYNC;
+            break;
+    }
+}
+
+/* ── UART background task ─────────────────────────────────── */
+static void gps_rx_task(void *arg) {
+    
+    // TODO: 
+    // - we might need to pass the system health instead, probabily, idk
+    //   so we can flag it dead.
+    // - pass the GPS_UART port in arguments.
+    // - fix the waiting time
+    // - trigger data ready across tasks for gps_read.
     uint8_t byte;
     uint8_t line_buf[GPS_MAX_SENTENCE_LEN];
-    size_t  line_pos = 0;
+    uint8_t attempts = 0;
+    struct GPSInfo *gps_info = (struct GPSInfo *)arg;
 
     ESP_LOGI(TAG, "GPS RX task running");
 
     while (1) {
-        int len = uart_read_bytes(GPS_UART, &byte, 1, pdMS_TO_TICKS(100));
-        if (len <= 0) continue;
-
-        if (byte == '\n' || byte == '\r') {
-            if (line_pos > 0) {
-                /* Complete sentence — copy to shared buffer */
-                memcpy(s_sentence, line_buf, line_pos);
-                s_sentence_len = line_pos;
-                s_new_data     = true;
-                line_pos       = 0;
+        int len = uart_read_bytes(GPS_UART, &byte, 1, pdMS_TO_TICKS(100));  // I think 1 second waiting would be enough
+                                                                            // because we are reading this at 1Hz as well
+        if (len < 0) {
+            attempts++;
+            if (MAX_FAILED_ATTEMPTS == attempts) {
+                break;
             }
-        } else {
-            if (line_pos < GPS_MAX_SENTENCE_LEN - 1) {
-                line_buf[line_pos++] = byte;
-            }
+        } else if (0 == len) {
+            continue;
         }
+
+        attempts = 0;
+
+        parse_nmea(gps_info, byte);
+
+        if (gps_info->available == NMEA_READY_INFO) { // meaning both things are parsed.
+            ESP_LOGI(TAG,"Status %c, speed %s, course %s, time %s, lat %s %c, lon %s %c, sats %s", \
+                    gps_info->status, \
+                    gps_info->speed, \
+                    gps_info->course, \
+                    gps_info->time, \
+                    gps_info->lat, \
+                    gps_info->lat_orientation, \
+                    gps_info->lon, \
+                    gps_info->lon_orientation, \
+                    gps_info->sat_count
+                    );
+            /* TODO: yield data is ready and clean buffer*/
+            memset(gps_info, 0, sizeof(struct GPSInfo));
+        }
+        
     }
+
+    // if GPS dead
+    while(1);
 }
 
 /* ── Public API ───────────────────────────────────────────── */
 
-//esp_err_t gps_init(i2c_master_bus_handle_t bus)
-//{
-//    // TODO: THIS IS SERIAL-Initialization
-//    (void)bus;  /* GPS doesn't use I2C */
-//
-//    const uart_config_t uart_cfg = {
-//        .baud_rate  = GPS_BAUD_RATE,
-//        .data_bits  = UART_DATA_8_BITS,
-//        .parity     = UART_PARITY_DISABLE,
-//        .stop_bits  = UART_STOP_BITS_1,
-//        .flow_ctrl  = UART_HW_FLOWCTRL_DISABLE,
-//        .source_clk = UART_SCLK_DEFAULT,
-//    };
-//
-//    esp_err_t ret = uart_param_config(GPS_UART_NUM, &uart_cfg);
-//    if (ret != ESP_OK) return ret;
-//
-//    ret = uart_set_pin(GPS_UART_NUM, PIN_GPS_TX, PIN_GPS_RX,
-//                       UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
-//    if (ret != ESP_OK) return ret;
-//
-//    ret = uart_driver_install(GPS_UART_NUM, UART_BUF_SIZE * 2, 0, 0, NULL, 0);
-//    if (ret != ESP_OK) return ret;
-//
-//    ESP_LOGI(TAG, "GPS UART%d ready  TX=%d RX=%d  %d baud",
-//             GPS_UART_NUM, PIN_GPS_TX, PIN_GPS_RX, GPS_BAUD_RATE);
-//    return ESP_OK;
-//}
 
-#define ABSOLUTE_ATTEMPTS   1024        // Number of attempts including returned 
-                                        // read bytes being 0, this depends on 
-                                        // the number of NMEA sentences we are 
-                                        // having.
+esp_err_t gps_init(uart_port_t port, struct GPSInfo *gps_info) {
+    int attempts;
 
-#define MIN_NMEA            "$GNRMC"    // According to the doc, we only need:
-                                        // - $GNRMC
-                                        // - $GNGGA
-                                        //
-                                        // Remember we are using this onnly to 
-                                        // see if the GPS is alive.
-
-esp_err_t gps_init(uart_port_t port) {
+    /* to read GPS data */
     uint8_t data[BUF_SIZE] = {0};
+    int len;
+
+    /* to find NMEA */
     const char required_min_NMEA[] = MIN_NMEA;
-    uint8_t attempts;
-    int len, i, j, min_NMEA_len;
+    int j;
+    uint8_t *d;
 
+    /* Initialize GPS Info*/
+    memset(gps_info, 0, sizeof(struct GPSInfo));
+
+    /* Wait for NMEA of interest defined in MIN_NMEA */
     j = 0;
-    min_NMEA_len = strlen(required_min_NMEA);
-
-    for (attempts = 0; attempts < ABSOLUTE_ATTEMPTS; attempts++) {
+    for (attempts = 0; attempts < GPS_MAX_INIT_ATTEMPTS; attempts++) {
         len = uart_read_bytes(port, data, BUF_SIZE, TIMEOUT_INIT / portTICK_PERIOD_MS);
 
         if (len < 0) {
@@ -118,19 +301,20 @@ esp_err_t gps_init(uart_port_t port) {
             return ESP_ERR_TIMEOUT;
 
         } else if (len > 0) {
-
-            for (i = 0; i < len; i++) {
-
-                if (required_min_NMEA[j] == data[i]) {
+            // This length check is only because uart_read_bytes might touch the 
+            // buffer even if it returns zero. It's a way to say, i don't trust 
+            // you, uart_read_bytes. I don't like, but safety reasons. 
+            for (d = data; *d; d++) {
+                if ((required_min_NMEA[j] == *d) || (1 == j) || (2 == j)) {
                     j++;
                 } else {
                     j = 0;
                 }
 
-                if (min_NMEA_len == j)
+                if (MIN_NMEA_SZ == j)
                     return ESP_OK;
 
-                data[i] = 0;
+                *d = 0;
             }
         }
     }
@@ -138,12 +322,11 @@ esp_err_t gps_init(uart_port_t port) {
     return ESP_ERR_INVALID_RESPONSE;
 }
 
-void gps_start_task(void)
-{
-    /* This task needs to be pined to one core, only, far from i2c devices,
-     * the slow core is ok
-     */
-    xTaskCreate(gps_rx_task, "gps_rx", 4096, NULL, 5, NULL);
+void gps_start_task(struct GPSInfo *gps_info) {
+    static TaskHandle_t gps_handler = NULL;
+    xTaskCreatePinnedToCore(gps_rx_task, "gps_rx", 4096, (void *) gps_info, 5, &gps_handler, 1);
+    // TODO: We might need to return this task handler so, it can be terminated 
+    // if something fails
 }
 
 esp_err_t gps_read(uint8_t *out_data)

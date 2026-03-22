@@ -86,6 +86,7 @@ typedef struct {
     i2c_master_bus_handle_t bus_bme_ina;
     uint16_t health; /* LSB: Devices health
                       * MSB: Peripherals health*/
+    struct GPSInfo gps_data;
     FlightRecord *record;
 } System;
 
@@ -403,9 +404,10 @@ void sys_POST(System *sys){
 
 #if CONFIG_ENABLE_GPS
     if (sys->health & (1 << GPS_UART_HEALTH)) {
-        if (ESP_OK == gps_init(GPS_UART)) {
+        if (ESP_OK == gps_init(GPS_UART, &sys->gps_data)) {
             sys->health |= (1 << GPS_HEALTH);
-            gps_start_task(); // pin to core 1, APP_CPU
+            gps_start_task(&sys->gps_data); // pin to core 1, APP_CPU
+            // NOTE: I think GPS lock (numbers of sats connected can be visual things rather than waiting here for connection)
         }
     }
 #endif

@@ -15,10 +15,32 @@
 /** Max NMEA sentence length (spec says 82 chars including CR LF) */
 #define GPS_MAX_SENTENCE_LEN   128
 
+/*--- GPS Info required for the payload */
+#define GPS_SPEED_STR_SZ    10
+#define GPS_COURSE_STR_SZ   10
+#define GPS_TIME_STR_SZ     10
+#define GPS_LAT_STR_SZ      11
+#define GPS_LON_STR_SZ      12
+#define GPS_SATCOUNT_STR_SZ 4
+struct GPSInfo {
+    char status;                    // 'A' or 'V'
+    char speed[GPS_SPEED_STR_SZ];   // Unknown length
+    char course[GPS_COURSE_STR_SZ]; // Unknown length
+    
+    char time[GPS_TIME_STR_SZ];     // 'HHMMSS.SS\0'
+    char lat[GPS_LAT_STR_SZ];       // 'ddmm.mmmmm\0'
+    char lat_orientation;           // 'N' or 'S'
+    char lon[GPS_LON_STR_SZ];       // 'dddmm.mmmmm\0'
+    char lon_orientation;           // 'E' or 'W'
+    char sat_count[GPS_SATCOUNT_STR_SZ]; // Often something ranging between 0 and 70-ish, 
+                                    // but let's assume it could be more than that
+    uint8_t available;              // When everything is parsed this is raised.
+};
+
 /**
  * Initialise GPS UART. The `bus` parameter is ignored (GPS uses UART, not I2C).
  */
-esp_err_t gps_init(uart_port_t port);
+esp_err_t gps_init(uart_port_t port, struct GPSInfo *gps_info);
 
 /**
  * Read the latest buffered NMEA line into out_data.
@@ -31,6 +53,6 @@ esp_err_t gps_read(uint8_t *out_data);
  * Start the background UART receive task.
  * Call after gps_init().
  */
-void gps_start_task(void);
+void gps_start_task(struct GPSInfo *gps_info);
 
 extern const sensor_driver_t gps_driver;
