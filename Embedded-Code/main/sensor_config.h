@@ -24,20 +24,30 @@
  *  debuggin or test, it also allows easy visibility in the 
  *  mapping without hardcoding the drivers to specific pins
  * ────────────────────────────────────────────────────────── */
-// MPU6050
+/*-- MPU6050 --*/
 #define MPU6050_SDA             CONFIG_I2C0_MASTER_SDA
 #define MPU6050_SCL             CONFIG_I2C0_MASTER_SCL
 
-// BME680/INA219
+/*-- BME680/INA219 --*/
 #define BME_INA_SDA             CONFIG_I2C1_MASTER_SDA
 #define BME_INA_SCL             CONFIG_I2C1_MASTER_SCL
 
-// GPS UART
+/*-- GPS UART --*/
 #define GPS_UART                UART_NUM_2
 #define GPS_TX                  CONFIG_GPS_TXD_PIN
 #define GPS_RX                  CONFIG_GPS_RXD_PIN
 #define GPS_BAUD                CONFIG_GPS_BAUD_RATE
 #define GPS_RX_BUF_SZ           1024
+#define GPS_CORE                1
+#define GPS_HM_SKIP_SAMPLES     60                      // Skip samples while on Health Monitor
+
+/*-- HEALTH_MONITOR UART --*/
+// NOTE:
+// - Debugging  -> USB-Serial
+// - Deployment -> LoRA
+#define HEALTH_MONITOR_UART     UART_NUM_0              // Debugging purposes
+#define HEALTH_MONITOR_CORE     1
+#define HEALTH_MONITOR_BAUD     105200
 
 // SD Card (SDMMC 1-bit mode)
 #define PIN_SD_CLK              CONFIG_SD_CLK_PIN

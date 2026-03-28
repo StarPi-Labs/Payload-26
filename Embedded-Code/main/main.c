@@ -1,3 +1,4 @@
+
 /**
  * @file main.c
  * @brief Star-PI Payload — modular sensor orchestrator.
@@ -29,6 +30,8 @@
 
 #include "sdkconfig.h"
 #include "sensor_config.h"
+#include "systemp2i.h"
+#include "health_monitoring.h"
 
 /* ── Conditionally include sensor drivers ─────────────────── */
 #if CONFIG_ENABLE_I2C_BUS
@@ -57,39 +60,8 @@
 
 static const char *TAG = "main";
 
-/*--- System ---*/
-#define I2C0_HEALTH         15
-#define I2C1_HEALTH         14
-#define GPS_UART_HEALTH     13
-#define LORA_UART_HEALTH    12
-#define SD_HEALTH           11
-
-#define MPU6050_HEALTH      7
-#define BME680_HEALTH       6
-#define INA219_HEALTH       5
-#define GPS_HEALTH          4
-#define LORA_HEALTH         3
-#define FILESYSTEM_HEALTH   2
-#define BATTERY_HEALTH      1
-#define SENSORS_HEALTH      ((1 << MPU6050_HEALTH) | (1 << BME680_HEALTH) | (1 << INA219_HEALTH) | (1 << GPS_HEALTH))
-
-typedef struct {
-    uint32_t lauch_timestamp;
-    uint16_t flight_state;
-    uint16_t boot_count;
-} FlightRecord;
-
+/* Global Variables */
 RTC_DATA_ATTR FlightRecord global_flight_record;
-
-typedef struct {
-    i2c_master_bus_handle_t bus_mpu6050;
-    i2c_master_bus_handle_t bus_bme_ina;
-    uint16_t health; /* LSB: Devices health
-                      * MSB: Peripherals health*/
-    struct GPSInfo gps_data;
-    FlightRecord *record;
-} System;
-
 
 /* ═══════════════════════════════════════════════════════════
  *  Sensor registry — filled at boot from enabled drivers
@@ -149,7 +121,7 @@ static inline size_t ring_buffer_available(void)
 static size_t ring_buffer_write(const uint8_t *src, size_t len)
 {
     if (ring_buffer_free() < len) {
-        ESP_LOGW(TAG, "Ring buffer full — dropping %d bytes", (int)len);
+        // ESP_LOGW(TAG, "Ring buffer full — dropping %d bytes", (int)len);
         return 0;
     }
     size_t w = atomic_load(&ring_buffer.write_index);
@@ -316,7 +288,48 @@ static void task_sd_write(void *arg)
 /* ═══════════════════════════════════════════════════════════
  *  app_main
  * ═══════════════════════════════════════════════════════════ */
+void hm_start_task(System *sys) {
+    static TaskHandle_t hm_handler = NULL;
+    static struct TaskParams hm_params;
+    hm_params.hm_buffer = sys->hm_buffer;
+    hm_params.context = NULL;
+    hm_params.log_buffer = NULL;
+
+    xTaskCreatePinnedToCore(
+        health_monitoring_task,
+        "health_monitoring_task",
+        4096,
+        (void *) &hm_params,
+        6,
+        &hm_handler,
+        GPS_CORE
+    );
+    // TODO: sys->tasks.hm = &hm_handler;
+
+}
+void gps_start_task(System *sys) {
+    static TaskHandle_t gps_handler = NULL; 
+    static struct TaskParams gps_params;
+    gps_params.hm_buffer  = sys->hm_buffer;
+    gps_params.log_buffer = sys->log_buffer;
+    gps_params.context = &sys->context;
+
+    xTaskCreatePinnedToCore(
+        gps_rx_task, 
+        "gps_rx", 
+        4096, 
+        (void *) &gps_params,
+        5, 
+        &gps_handler, 
+        GPS_CORE
+    );
+
+    // TODO: link this taks to system
+    // sys->tasks.gps = &gps_handler;
+}
+
 void sys_init(System *sys) {
+    sys->context.mode = MODE_INIT;
     sys->record = &global_flight_record;
     esp_reset_reason_t reason = esp_reset_reason();
 
@@ -347,13 +360,13 @@ void sys_init(System *sys) {
     err = sys_i2c0_init(MPU6050_SDA, MPU6050_SCL);
     if (ESP_OK == err) {
         sys->health |= 1 << I2C0_HEALTH;
-        sys->bus_mpu6050 = i2c_bus0_get_handle();
+        sys->port.mpu6050 = i2c_bus0_get_handle();
     }
 
     err = sys_i2c1_init(BME_INA_SDA, BME_INA_SCL);
     if (ESP_OK == err) {
         sys->health |= 1 << I2C1_HEALTH;
-        sys->bus_bme_ina = i2c_bus1_get_handle();
+        sys->port.bme_ina = i2c_bus1_get_handle();
     }
 #endif
 
@@ -381,32 +394,66 @@ void sys_init(System *sys) {
     }
 }
 
+
+
+void sys_manager(void *args){
+    System *sys = (System *) args;
+    uint8_t active_events = 0;
+
+    while(1) {
+        xSemaphoreTake(sys->context.manager_up, portMAX_DELAY);
+
+        /* Grab Event */
+        taskENTER_CRITICAL(&sys->context.events_guard);
+        active_events = sys->context.events;
+        sys->context.events = 0; // Reset for the next event
+        taskEXIT_CRITICAL(&sys->context.events_guard);
+
+        /* Process Event */
+        if (active_events & SHOCK_3G_DETECTED) {
+            if (MODE_ARMED == sys->context.mode) {
+                sys->context.mode = MODE_BOOST;
+            }
+        }
+        /* if (active_events & ANOTHER_EVENT ) */
+    }
+}
+
 void sys_POST(System *sys){
     /**
      * Power-On Self-Test
      * ------------------
      *  Bind and ping devices
      */
+    sys->context.mode = MODE_POST;
+    sys->context.manager_up = xSemaphoreCreateBinary();
+
+    /*-- Initialise Logger buffer --*/
+    sys->log_buffer = logger_buff_init();
+
+    /*-- Initialise health monitoring buffer --*/
+    sys->hm_buffer = hm_buff_init();
+    hm_start_task(sys);
     
     if (sys->health & (1 << I2C0_HEALTH)) {
-        if (ESP_OK == mpu6050_init(sys->bus_mpu6050)) sys->health |= (1 << MPU6050_HEALTH);
+        if (ESP_OK == mpu6050_init(sys->port.mpu6050)) sys->health |= (1 << MPU6050_HEALTH);
     }
 
     if (sys->health & (1 << I2C1_HEALTH)) {
 #if CONFIG_ENABLE_BME680
-        if (ESP_OK == bme680_init(sys->bus_bme_ina)) sys->health |= (1 << BME680_HEALTH);
+        if (ESP_OK == bme680_init(sys->port.bme_ina)) sys->health |= (1 << BME680_HEALTH);
 #endif
 
 #if CONFIG_ENABLE_INA219
-        if (ESP_OK == ina219_init(sys->bus_bme_ina)) sys->health |= (1 << INA219_HEALTH);
+        if (ESP_OK == ina219_init(sys->port.bme_ina)) sys->health |= (1 << INA219_HEALTH);
 #endif
     }
 
 #if CONFIG_ENABLE_GPS
     if (sys->health & (1 << GPS_UART_HEALTH)) {
-        if (ESP_OK == gps_init(GPS_UART, &sys->gps_data)) {
+        if (ESP_OK == gps_init(GPS_UART)) {
             sys->health |= (1 << GPS_HEALTH);
-            gps_start_task(&sys->gps_data); // pin to core 1, APP_CPU
+            gps_start_task(sys); // pin to core 1, APP_CPU
             // NOTE: I think GPS lock (numbers of sats connected can be visual things rather than waiting here for connection)
         }
     }

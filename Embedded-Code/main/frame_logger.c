@@ -34,22 +34,19 @@ static uint32_t      s_frame_count = 0;
  *  CRC-16 CCITT (polynomial 0x1021, initial value 0xFFFF)
  * ═══════════════════════════════════════════════════════════ */
 
-uint16_t crc16_ccitt(const uint8_t *data, size_t len)
-{
-    uint16_t crc = 0xFFFF;
+void crc16_ccitt(uint16_t *crc, const uint8_t *data, size_t len) {
+    // uint16_t crc = 0xFFFF;
     
     for (size_t i = 0; i < len; i++) {
-        crc ^= ((uint16_t)data[i] << 8);
+        *crc ^= ((uint16_t)data[i] << 8);
         for (int j = 0; j < 8; j++) {
-            if (crc & 0x8000) {
-                crc = (crc << 1) ^ 0x1021;
+            if (*crc & 0x8000) {
+                *crc = (*crc << 1) ^ 0x1021;
             } else {
-                crc <<= 1;
+                *crc <<= 1;
             }
         }
     }
-    
-    return crc;
 }
 
 /* ═══════════════════════════════════════════════════════════
@@ -156,7 +153,8 @@ size_t frame_finish(frame_builder_t *fb)
     fb->buffer[7] = (uint8_t)((fb->sensor_bitmap >> 8) & 0xFF);
     
     /* Calculate CRC over entire frame (excluding the CRC field itself) */
-    uint16_t crc = crc16_ccitt(fb->buffer, fb->offset);
+    //uint16_t crc = crc16_ccitt(fb->buffer, fb->offset);
+    uint16_t crc = 0xFFFF;
     
     /* Append CRC (little-endian) */
     fb->buffer[fb->offset++] = (uint8_t)(crc & 0xFF);
@@ -298,6 +296,67 @@ uint32_t frame_logger_get_count(void)
 FILE *frame_logger_get_file(void)
 {
     return NULL;
+}
+
+/**
+ * LOGGER 
+ */
+// This buffer is used for storage
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
+#define SECTOR_SIZE 4096    // 8 blocks of SD card (512 bytes each).
+struct LoggerBuffer {
+    volatile uint8_t bufA[SECTOR_SIZE];
+    volatile uint8_t bufB[SECTOR_SIZE];
+    volatile uint8_t *active_fill_buffer;
+    volatile uint8_t *active_save_buffer;
+    volatile uint32_t fill_index;
+    portMUX_TYPE guard;
+    SemaphoreHandle_t ready;
+};
+
+LoggerBuffer *logger_buff_init(void) {
+    static LoggerBuffer buf;
+    portMUX_INITIALIZE(&buf.guard);
+    buf.ready = xSemaphoreCreateBinary();
+    buf.active_fill_buffer = buf.bufA;
+    buf.active_save_buffer = NULL;
+    buf.fill_index = 0;
+    return &buf;
+}
+
+
+void write_to_ring_buffer(uint8_t packet, void *data, uint16_t payload_size) {
+    /*
+    uint16_t total_sz = sizeof(frame_header_t) + payload_size;
+    uint8_t *my_write_pointer = NULL;
+    frame_header_t header;
+
+    taskENTER_CRITICAL(&buffer_guard);
+
+    if (fill_index + total_sz > SECTOR_SZ) {
+        // pad the missing space
+        memset(&active_fill_buffer[fill_index], 0, SECTOR_SZ - fill_index);
+
+        active_save_buffer = active_fill_buffer;
+        active_fill_buffer = (active_fill_buffer == buffer_A) \
+            ? buffer_B : buffer_A;
+        fill_index = 0;
+
+        // Wake up the logger
+        xSemaphoreGiveFromISR(buffer_ready_singal, NULL);
+    } 
+
+    my_write_pointer = &active_fill_buffer[fill_index];
+    fill_index += total_sz;
+    taskEXIT_CRITICAL(&buffer_guard);
+
+    header.type = type;
+    header.timestamp_ms = xTaskGetTickCount * portTICK_PERIOD_MS;
+    memcpy(my_write_pointer, &header, sizeof(header));
+    memcpy(my_write_pointer + sizeof(header), payload, payload_size);
+    */
+
 }
 
 #endif /* CONFIG_ENABLE_SD_CARD */

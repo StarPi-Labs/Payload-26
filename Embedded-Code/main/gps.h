@@ -10,7 +10,7 @@
 
 #include "driver/uart.h"
 #include "sensor_config.h"
-
+#include "systemp2i.h"
 
 /** Max NMEA sentence length (spec says 82 chars including CR LF) */
 #define GPS_MAX_SENTENCE_LEN   128
@@ -40,7 +40,8 @@ struct GPSInfo {
 /**
  * Initialise GPS UART. The `bus` parameter is ignored (GPS uses UART, not I2C).
  */
-esp_err_t gps_init(uart_port_t port, struct GPSInfo *gps_info);
+esp_err_t gps_init(uart_port_t port);
+void gps_rx_task(void *arg);
 
 /**
  * Read the latest buffered NMEA line into out_data.
@@ -48,11 +49,5 @@ esp_err_t gps_init(uart_port_t port, struct GPSInfo *gps_info);
  * `out_data` must be at least GPS_MAX_SENTENCE_LEN bytes.
  */
 esp_err_t gps_read(uint8_t *out_data);
-
-/**
- * Start the background UART receive task.
- * Call after gps_init().
- */
-void gps_start_task(struct GPSInfo *gps_info);
 
 extern const sensor_driver_t gps_driver;

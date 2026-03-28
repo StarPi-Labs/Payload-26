@@ -14,6 +14,8 @@
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "frame_logger.h"
+#include "health_monitoring.h"
 
 #include <string.h>
 
@@ -219,7 +221,7 @@ void parse_nmea(struct GPSInfo *gps_info, uint8_t byte) {
 }
 
 /* ── UART background task ─────────────────────────────────── */
-static void gps_rx_task(void *arg) {
+void gps_rx_task(void *arg) {
     
     // TODO: 
     // - we might need to pass the system health instead, probabily, idk
@@ -230,7 +232,10 @@ static void gps_rx_task(void *arg) {
     uint8_t byte;
     uint8_t line_buf[GPS_MAX_SENTENCE_LEN];
     uint8_t attempts = 0;
-    struct GPSInfo *gps_info = (struct GPSInfo *)arg;
+    uint8_t telemetry_counter = 0;
+    struct GPSInfo gps_info = {0};
+
+    struct TaskParams *tparams = (struct TaskParams *) arg;
 
     ESP_LOGI(TAG, "GPS RX task running");
 
@@ -240,6 +245,7 @@ static void gps_rx_task(void *arg) {
         if (len < 0) {
             attempts++;
             if (MAX_FAILED_ATTEMPTS == attempts) {
+                // TODO: should i report this event and report GPS is dead?
                 break;
             }
         } else if (0 == len) {
@@ -248,22 +254,47 @@ static void gps_rx_task(void *arg) {
 
         attempts = 0;
 
-        parse_nmea(gps_info, byte);
+        parse_nmea(&gps_info, byte);
 
-        if (gps_info->available == NMEA_READY_INFO) { // meaning both things are parsed.
-            ESP_LOGI(TAG,"Status %c, speed %s, course %s, time %s, lat %s %c, lon %s %c, sats %s", \
-                    gps_info->status, \
-                    gps_info->speed, \
-                    gps_info->course, \
-                    gps_info->time, \
-                    gps_info->lat, \
-                    gps_info->lat_orientation, \
-                    gps_info->lon, \
-                    gps_info->lon_orientation, \
-                    gps_info->sat_count
+        if (gps_info.available == NMEA_READY_INFO) {
+            /* TODO: After parsed, this task should sleep for a second. */
+            switch(tparams->context->mode) {
+            case MODE_POST:
+            case MODE_SENSOR_CHECK:
+                // This for debugging only
+                // TODO: send the defined frame
+                ESP_LOGI(TAG,"Status %c, speed %s, course %s, time %s, lat %s %c, lon %s %c, sats %s", \
+                    gps_info.status, \
+                    gps_info.speed, \
+                    gps_info.course, \
+                    gps_info.time, \
+                    gps_info.lat, \
+                    gps_info.lat_orientation, \
+                    gps_info.lon, \
+                    gps_info.lon_orientation, \
+                    gps_info.sat_count
                     );
-            /* TODO: yield data is ready and clean buffer*/
-            memset(gps_info, 0, sizeof(struct GPSInfo));
+
+                telemetry_counter++;
+                if (telemetry_counter >= GPS_HM_SKIP_SAMPLES) {
+                    hm_send(tparams->hm_buffer, SBIT_MQ10, (void *)&gps_info, sizeof(struct GPSInfo));
+                    telemetry_counter = 0;
+                }
+                break;
+ 
+            case MODE_ARMED:
+                telemetry_counter++;
+                if (telemetry_counter >= GPS_HM_SKIP_SAMPLES) {
+                    hm_send(tparams->hm_buffer, SBIT_MQ10, (void *)&gps_info, sizeof(struct GPSInfo));
+                    telemetry_counter = 0;
+                }
+                break;
+            case MODE_BOOST:
+            case MODE_COAST:
+                write_to_ring_buffer(SBIT_MQ10, (void *)&gps_info, sizeof(struct GPSInfo));
+                break;
+            }
+            memset(&gps_info, 0, sizeof(struct GPSInfo));
         }
         
     }
@@ -275,7 +306,7 @@ static void gps_rx_task(void *arg) {
 /* ── Public API ───────────────────────────────────────────── */
 
 
-esp_err_t gps_init(uart_port_t port, struct GPSInfo *gps_info) {
+esp_err_t gps_init(uart_port_t port) {
     int attempts;
 
     /* to read GPS data */
@@ -286,9 +317,6 @@ esp_err_t gps_init(uart_port_t port, struct GPSInfo *gps_info) {
     const char required_min_NMEA[] = MIN_NMEA;
     int j;
     uint8_t *d;
-
-    /* Initialize GPS Info*/
-    memset(gps_info, 0, sizeof(struct GPSInfo));
 
     /* Wait for NMEA of interest defined in MIN_NMEA */
     j = 0;
@@ -301,9 +329,9 @@ esp_err_t gps_init(uart_port_t port, struct GPSInfo *gps_info) {
             return ESP_ERR_TIMEOUT;
 
         } else if (len > 0) {
-            // This length check is only because uart_read_bytes might touch the 
-            // buffer even if it returns zero. It's a way to say, i don't trust 
-            // you, uart_read_bytes. I don't like, but safety reasons. 
+            // NOTE: This length check is only because uart_read_bytes might touch
+            // the buffer even if it returns zero. It's a way to say, i don't trust 
+            // you, uart_read_bytes. I don't like it, but safety reasons. 
             for (d = data; *d; d++) {
                 if ((required_min_NMEA[j] == *d) || (1 == j) || (2 == j)) {
                     j++;
@@ -322,12 +350,6 @@ esp_err_t gps_init(uart_port_t port, struct GPSInfo *gps_info) {
     return ESP_ERR_INVALID_RESPONSE;
 }
 
-void gps_start_task(struct GPSInfo *gps_info) {
-    static TaskHandle_t gps_handler = NULL;
-    xTaskCreatePinnedToCore(gps_rx_task, "gps_rx", 4096, (void *) gps_info, 5, &gps_handler, 1);
-    // TODO: We might need to return this task handler so, it can be terminated 
-    // if something fails
-}
 
 esp_err_t gps_read(uint8_t *out_data)
 {

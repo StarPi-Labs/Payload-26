@@ -43,6 +43,32 @@
 #define SENSOR_BIT_AIR_QUALITY  (1 << 6)    /**< Air Quality (4 bytes) */
 #define SENSOR_BIT_POWER        (1 << 7)    /**< Power Monitor - INA219 (8 bytes) */
 
+/*-- Sensor Presense Reduced bitmap  */
+#define SBIT_MPU6050    (1 << 0)    // Covers Accelerometer and Gyros.
+#define SBIT_BME680     (1 << 1)    // Covers Temp, Hum, and Pressure.
+#define SBIT_MQ10       (1 << 2)    // GPS.
+#define SBIT_INA219     (1 << 3)    // Power and Current.
+#define SBIT_SYSSTATE   (1 << 4)    // Current System State.
+#define SBIT_RESERVED0  (1 << 5)    // Reserved
+#define SBIT_RESERVED1  (1 << 6)    // Reserved
+#define SBIT_RESERVED2  (1 << 7)    // Reserved
+
+/*-- Universal Header */
+typedef struct __attribute__((packed)) {
+    uint8_t frame_separator[3]; // synchronization xAA, 0xAA, 0xAA
+    uint8_t frame_info;         // sensor's name
+    uint32_t timestamp_ms;      // 4 bytes: times in milisecods
+} frame_header_t;
+
+typedef struct __attribute__((packed)) {
+    uint8_t AXH; uint8_t AXL;
+    uint8_t AYH; uint8_t AYL;
+    uint8_t AZH; uint8_t AZL;
+    uint8_t GXH; uint8_t GXL;
+    uint8_t GYH; uint8_t GYL;
+    uint8_t GZH; uint8_t GZL;
+} imu_payload_t;
+
 /** Data sizes for each sensor field (in bytes) */
 #define ACCEL_DATA_LEN          6
 #define GYRO_DATA_LEN           6
@@ -180,7 +206,7 @@ const uint8_t *frame_get_data(const frame_builder_t *fb);
  * @param len   Length in bytes
  * @return      16-bit CRC value
  */
-uint16_t crc16_ccitt(const uint8_t *data, size_t len);
+void crc16_ccitt(uint16_t *crc, const uint8_t *data, size_t len);
 
 /* ═══════════════════════════════════════════════════════════
  *  SD Card Binary Logger
@@ -219,3 +245,17 @@ uint32_t frame_logger_get_count(void);
  * Returns NULL if SD is not mounted.
  */
 FILE *frame_logger_get_file(void);
+
+
+/**
+ *-- TELEMETRY --
+ */
+void send_telemetry(uint8_t packet, void *data, uint16_t payload_size);
+
+/**
+ * -- LOGGER --
+ */
+
+typedef struct LoggerBuffer LoggerBuffer;
+LoggerBuffer *logger_buff_init(void);
+void write_to_ring_buffer(uint8_t packet, void *data, uint16_t payload_size);
