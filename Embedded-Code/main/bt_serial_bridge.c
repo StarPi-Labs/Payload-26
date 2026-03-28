@@ -15,6 +15,19 @@ static bool s_bt_started = false;
 static bool s_bt_has_client = false;
 static uint32_t s_spp_handle = 0;
 
+static esp_bt_mode_t bt_controller_mode_for_build(void)
+{
+#if CONFIG_BTDM_CTRL_MODE_BTDM
+    return ESP_BT_MODE_BTDM;
+#elif CONFIG_BTDM_CTRL_MODE_BR_EDR_ONLY
+    return ESP_BT_MODE_CLASSIC_BT;
+#elif CONFIG_BTDM_CTRL_MODE_BLE_ONLY
+    return ESP_BT_MODE_BLE;
+#else
+    return ESP_BT_MODE_CLASSIC_BT;
+#endif
+}
+
 static void bt_spp_cb(esp_spp_cb_event_t event, esp_spp_cb_param_t *param)
 {
     switch (event) {
@@ -58,7 +71,16 @@ bool bt_serial_init(const char *device_name)
         return false;
     }
 
-    esp_bt_controller_mem_release(ESP_BT_MODE_BLE);
+    esp_bt_mode_t bt_mode = bt_controller_mode_for_build();
+
+#if CONFIG_BTDM_CTRL_MODE_BLE_ONLY
+    ESP_LOGE(TAG, "Controller is configured BLE-only. Classic SPP requires BTDM or BR/EDR-only mode.");
+    return false;
+#endif
+
+    if (bt_mode == ESP_BT_MODE_CLASSIC_BT) {
+        esp_bt_controller_mem_release(ESP_BT_MODE_BLE);
+    }
 
     esp_bt_controller_config_t bt_cfg = BT_CONTROLLER_INIT_CONFIG_DEFAULT();
     ret = esp_bt_controller_init(&bt_cfg);
@@ -67,7 +89,7 @@ bool bt_serial_init(const char *device_name)
         return false;
     }
 
-    ret = esp_bt_controller_enable(ESP_BT_MODE_CLASSIC_BT);
+    ret = esp_bt_controller_enable(bt_mode);
     if (ret != ESP_OK && ret != ESP_ERR_INVALID_STATE) {
         ESP_LOGE(TAG, "bt controller enable failed: %s", esp_err_to_name(ret));
         return false;
