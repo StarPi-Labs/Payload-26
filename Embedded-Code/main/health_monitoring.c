@@ -4,6 +4,7 @@
 #include "health_monitoring.h"
 #include "frame_logger.h"
 #include "systemp2i.h"
+#include "bt_serial_bridge.h"
 
 #define BUF_SIZE    512 
 struct HMBuffer {
@@ -77,14 +78,17 @@ void health_monitoring_task(void *arg) {
     struct TaskParams *tparams = (struct TaskParams *) arg;
     HMBuffer *buf = tparams->hm_buffer;
     uint8_t byte;
+
+    bt_serial_init("GPS-Serial-Bluetooth");
+
     while(1) {
         xSemaphoreTake(buf->ready, portMAX_DELAY);
 
         while (buf->tail != buf->head) {
             byte = buf->data[buf->tail];
             buf->tail = (buf->tail + 1) % BUF_SIZE;
-            // TODO: byte send it over BLT
-            esp_rom_output_tx_one_char(byte); // TODO: debugging only
+            bt_serial_write_byte(byte);
+            esp_rom_output_tx_one_char(byte); // debugging mirror
             // TODO: UART_NUM_0 needs to be replaced here
             // uart_write_bytes(UART_NUM_0, &byte, 1);
         }

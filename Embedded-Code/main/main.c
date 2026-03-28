@@ -328,7 +328,7 @@ void gps_start_task(System *sys) {
     // sys->tasks.gps = &gps_handler;
 }
 
-void sys_init(System *sys) {
+void _sys_init(System *sys) {
     sys->context.mode = MODE_INIT;
     sys->record = &global_flight_record;
     esp_reset_reason_t reason = esp_reset_reason();
@@ -486,7 +486,7 @@ void sys_POST(System *sys){
 void app_main(void)
 {   
     System sys;
-    sys_init(&sys);
+    _sys_init(&sys);
     sys_POST(&sys);
 
     // TODO: SENSOR-CHECK, 
