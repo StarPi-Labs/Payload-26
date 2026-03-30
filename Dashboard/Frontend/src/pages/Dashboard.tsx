@@ -1,58 +1,21 @@
 import { Component, createSignal, onCleanup } from "solid-js";
+
+import { AtmosphericSample } from "../models/atmospheric-sample";
+import { makeSample } from "../utils/mock-telemetry";
+
 import AttitudeCard from "../components/AttitudeCard";
 import AtmosphereCard from "../components/AtmosphereCard";
 import NavigationCard from "../components/base/NavigationCard";
-import { AtmosphericSample } from "../models/atmospheric-sample";
 import VelocityGraphCard from "../components/VelocityGraphCard";
 import AltitudeGraphCard from "../components/AltitudeGraphCard";
-import VideoPlayer from "../components/base/VideoPlayer";
 import AccellerationGraphCard from "../components/AccellerationGraphCard";
 import AltitudeTracker from "../components/AltitudeTracker";
+import VideoPlayer from "../components/VideoPlayer";
+import RocketMapCard from "../components/RocketMapCard"
 
 const Dashboard: Component = () => {
-    const randomInRange = (min: number, max: number) => Math.random() * (max - min) + min;
-    const randomBool = (trueChance = 0.9) => Math.random() < trueChance;
-
-    let testAlt = 0;
-    let altDirection = 1; // 1 sale, -1 scende
-
-    const makeSample = (): AtmosphericSample => {
-
-        // Semplice incremento/decremento
-        testAlt += 15 * altDirection;
-
-        // Rimbalza tra 0 e 1200
-        if (testAlt >= 1200) {
-            testAlt = 1200;
-            altDirection = -1;
-        } else if (testAlt <= 0) {
-            testAlt = 0;
-            altDirection = 1;
-        }
-
-        return {
-            ts: Date.now(),
-            roll: randomInRange(-45, 45),
-            pitch: randomInRange(-45, 45),
-            yaw: randomInRange(0, 360),
-            status: randomBool(0.95),
-
-            alt: testAlt, // Usiamo il nostro contatore che va su e giù
-
-            // Tutto il resto è tornato puramente randomico come lo avevi scritto tu:
-            vvel: randomInRange(-40, 40),
-            hvel: randomInRange(0, 80),
-            lat: randomInRange(43.30, 43.45),
-            long: randomInRange(10.05, 10.20),
-            gps: randomBool(0.85),
-            temp: randomInRange(-5, 35),
-            pres: randomInRange(950, 1030),
-            rh: randomInRange(10, 95),
-            accelX: randomInRange(-1, 1),
-            accelY: randomInRange(-1, 1),
-            accelZ: randomInRange(-1, 1),
-        };
-    };
+    
+    // il codice per i test (makeSample) è in utils/mock-telemetry
 
     const [sample, setSample] = createSignal<AtmosphericSample>(makeSample());
 
@@ -73,6 +36,7 @@ const Dashboard: Component = () => {
                 <h1 class="text-2xl font-semibold">Dashboard</h1>
             </div>
 
+            {/* DATI METRICI */}
             <div class="grid grid-cols-1 xl:grid-cols-3 gap-4">
                 <AttitudeCard
                     roll={sample().roll}
@@ -97,21 +61,20 @@ const Dashboard: Component = () => {
             </div>
 
             <div class="grid grid-cols-1 lg:grid-cols-4 gap-4">
-
+                {/* VIDEO PLAYER */}
                 <div class="lg:col-span-2 h-full">
                     <VideoPlayer
                         sources={[
-                            { id: "cam1", label: "Front Camera", src: "/video/199582-910653711_medium.mp4" },
-                            { id: "cam2", label: "Bottom Camera", src: "video/854224-hd_1280_720_30fps.mp4" },
-                            { id: "cam3", label: "Arm Camera", src: "/video/arm-test.mp4" }
+                            { id: "cam1", label: "Front Camera", src: "assets/video/199582-910653711_medium.mp4" },
+                            { id: "cam2", label: "Bottom Camera", src: "assets/video/854224-hd_1280_720_30fps.mp4" },
+                            { id: "cam3", label: "Arm Camera", src: "assets/video/arm-test.mp4" }
                         ]}
                         objectFit="cover"
                     />
                 </div>
-
+                
                 <div class="flex flex-col sm:flex-row gap-4 lg:col-span-2">
-
-                    {/* SOTTO-COLONNA GRAFICI (flex-1 gli fa prendere tutto lo spazio rimasto) */}
+                    {/* SOTTO-COLONNA GRAFICI */}
                     <div class="flex flex-col gap-4 flex-1 w-full sm:w-0">
                         <VelocityGraphCard
                             time={sample().ts}
@@ -126,8 +89,8 @@ const Dashboard: Component = () => {
                             class="w-full"
                         />
                     </div>
-
-                    {/* IL RAZZO (Largo fisso 112px o 128px, ma si stira in altezza) */}
+                    
+                    {/* MINI COLONNA TRACKER ALTITUDINE */}
                     <AltitudeTracker
                         currentAltitude={sample().alt}
                         targetAltitude={1200}
@@ -138,6 +101,8 @@ const Dashboard: Component = () => {
                 </div>
 
             </div>
+
+            {/* GRAFICO */}
             <div class="grid gap-4">
                 <AccellerationGraphCard
                     time={sample().ts}
@@ -147,6 +112,13 @@ const Dashboard: Component = () => {
                     class="w-full"
                 />
             </div>
+            
+            {/* MAPPA */}
+            <RocketMapCard
+                latitude={sample().lat}
+                longitude={sample().long}
+                gpsFix={sample().gps}
+            />
         </div>
 
     );
