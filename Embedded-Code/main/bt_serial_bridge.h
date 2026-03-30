@@ -11,6 +11,7 @@ extern "C" {
 bool bt_serial_init(const char *device_name);
 void bt_serial_write_byte(uint8_t byte);
 bool bt_serial_has_client(void);
+void bt_serial_write_chunk(uint8_t *data, uint16_t len);
 
 #ifdef __cplusplus
 }

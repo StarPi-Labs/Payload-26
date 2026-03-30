@@ -22,7 +22,7 @@
 #define GPS_LAT_STR_SZ      11
 #define GPS_LON_STR_SZ      12
 #define GPS_SATCOUNT_STR_SZ 4
-struct GPSInfo {
+struct __attribute__((packed)) GPSInfo {
     char status;                    // 'A' or 'V'
     char speed[GPS_SPEED_STR_SZ];   // Unknown length
     char course[GPS_COURSE_STR_SZ]; // Unknown length

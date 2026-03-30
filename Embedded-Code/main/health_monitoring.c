@@ -6,20 +6,23 @@
 #include "systemp2i.h"
 #include "bt_serial_bridge.h"
 
-#define BUF_SIZE    512 
+#include "esp_log.h" // debug
+
+#define HM_BUFFER_SZ    512 
 struct HMBuffer {
     volatile size_t head;
     volatile size_t tail;
-    uint8_t data[BUF_SIZE];
+    uint8_t data[HM_BUFFER_SZ];
     portMUX_TYPE guard;
     SemaphoreHandle_t ready;
 };
 
 HMBuffer * hm_buff_init(void) {
     static HMBuffer buf; // Only buffer
+    memset(buf.data, 0, HM_BUFFER_SZ);
     buf.head = 0;
     buf.tail = 0;
-    buf.ready = xSemaphoreCreateCounting(BUF_SIZE, 0); // BUF_SIZE number of events.
+    buf.ready = xSemaphoreCreateCounting(HM_BUFFER_SZ, 0); // HM_BUFFER_SZ number of events.
     portMUX_INITIALIZE(&buf.guard);
     return &buf;
 }
@@ -28,11 +31,10 @@ void
 hm_send(
     HMBuffer *buf, 
     uint8_t type, 
-    void *payload, 
+    uint8_t *payload, 
     uint16_t payload_size
 ) 
 {
-    // header_sz + payload_size + crc_sz
     uint16_t total_sz = sizeof(frame_header_t) + payload_size + 2; 
     uint16_t crc = 0xFFFF;
 
@@ -48,14 +50,15 @@ hm_send(
 
     taskENTER_CRITICAL(&buf->guard);
 
-    if (buf->head + total_sz > BUF_SIZE) {
-        memset(buf->data, 0, BUF_SIZE - buf->head);
+
+    if (buf->head + total_sz > HM_BUFFER_SZ) {
+        memset(buf->data, 0, HM_BUFFER_SZ - buf->head);
         buf->head = 0;  
     }
 
     // Moving header
     memcpy(buf->data + buf->head, &header, sizeof(header));
-    buf->head = (buf->head + sizeof(header));
+    buf->head = buf->head + sizeof(header);
 
     // Moving payload
     memcpy(buf->data + buf->head, payload, payload_size);
@@ -63,35 +66,40 @@ hm_send(
 
     // Moving CRC-16
     memcpy(buf->data + buf->head + payload_size, &crc, 2);
-    buf->head = buf->head + 2;
-
-    // Trigger semaphore
-    xSemaphoreGive(buf->ready);
+    buf->head = (buf->head + 2) % HM_BUFFER_SZ;
 
     taskEXIT_CRITICAL(&buf->guard);
+    xSemaphoreGive(buf->ready);
 
 }
 
-#include "esp_rom_uart.h"
+#include "esp_rom_uart.h"   // debugging
+#define BT_TX_CHUNK_SIZE    128
 void health_monitoring_task(void *arg) {
 
     struct TaskParams *tparams = (struct TaskParams *) arg;
     HMBuffer *buf = tparams->hm_buffer;
     uint8_t byte;
+    uint8_t tx_chunk[BT_TX_CHUNK_SIZE];
+    uint16_t chunk_len = 0;
 
     bt_serial_init("GPS-Serial-Bluetooth");
 
     while(1) {
         xSemaphoreTake(buf->ready, portMAX_DELAY);
-
-        while (buf->tail != buf->head) {
-            byte = buf->data[buf->tail];
-            buf->tail = (buf->tail + 1) % BUF_SIZE;
-            bt_serial_write_byte(byte);
-            esp_rom_output_tx_one_char(byte); // debugging mirror
-            // TODO: UART_NUM_0 needs to be replaced here
-            // uart_write_bytes(UART_NUM_0, &byte, 1);
+        while (buf->tail != buf->head && chunk_len < BT_TX_CHUNK_SIZE) {
+            tx_chunk[chunk_len++] = buf->data[buf->tail];
+            buf->tail = (buf->tail + 1) % HM_BUFFER_SZ;
         }
+
+        if (chunk_len > 0) {
+            bt_serial_write_chunk(tx_chunk, chunk_len);
+        }
+        chunk_len = 0;
     }
 }
+
+
+
+
 

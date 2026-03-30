@@ -277,16 +277,28 @@ void gps_rx_task(void *arg) {
 
                 telemetry_counter++;
                 if (telemetry_counter >= GPS_HM_SKIP_SAMPLES) {
-                    hm_send(tparams->hm_buffer, SBIT_MQ10, (void *)&gps_info, sizeof(struct GPSInfo));
+                    hm_send(
+                        tparams->hm_buffer, 
+                        SBIT_MQ10, 
+                        (uint8_t *)&gps_info, 
+                        sizeof(struct GPSInfo) - 1
+                    );  // the available field is not send
                     telemetry_counter = 0;
+                    gps_info.available = 0;
                 }
                 break;
  
             case MODE_ARMED:
                 telemetry_counter++;
                 if (telemetry_counter >= GPS_HM_SKIP_SAMPLES) {
-                    hm_send(tparams->hm_buffer, SBIT_MQ10, (void *)&gps_info, sizeof(struct GPSInfo));
+                    hm_send(
+                        tparams->hm_buffer, 
+                        SBIT_MQ10, 
+                        (void *)&gps_info, 
+                        sizeof(struct GPSInfo) - 1
+                    ); // the available field is not sent.
                     telemetry_counter = 0;
+                    gps_info.available = 0;
                 }
                 break;
             case MODE_BOOST:
@@ -324,8 +336,7 @@ esp_err_t gps_init(uart_port_t port) {
         len = uart_read_bytes(port, data, BUF_SIZE, TIMEOUT_INIT / portTICK_PERIOD_MS);
 
         if (len < 0) {
-
-            ESP_LOGE(TAG, "Nothing received in the UART PORT, timeout.");
+            ESP_LOGE(TAG, "Nothing received on GPS UART PORT, timeout.");
             return ESP_ERR_TIMEOUT;
 
         } else if (len > 0) {

@@ -12,7 +12,7 @@ void
 hm_send(
     HMBuffer *buf,
     uint8_t type,
-    void *payload,
+    uint8_t *payload,
     uint16_t payload_size
 );
 

@@ -39,7 +39,7 @@
 #define GPS_BAUD                CONFIG_GPS_BAUD_RATE
 #define GPS_RX_BUF_SZ           1024
 #define GPS_CORE                1
-#define GPS_HM_SKIP_SAMPLES     60                      // Skip samples while on Health Monitor
+#define GPS_HM_SKIP_SAMPLES     2                      // Skip samples while on Health Monitor
 
 /*-- HEALTH_MONITOR UART --*/
 // NOTE:
