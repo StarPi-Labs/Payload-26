@@ -1,5 +1,5 @@
 import { Component, Show } from "solid-js"
-import { MetricStatProps } from "../models/ui/metric-stat-props"
+import { MetricStatProps } from "../../models/ui/metric-stat-props"
 
 const MetricStat: Component<MetricStatProps> = (props) => {
     const formattedValue = () => {

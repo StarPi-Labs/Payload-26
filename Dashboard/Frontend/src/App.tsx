@@ -1,6 +1,6 @@
 import { RouteSectionProps } from "@solidjs/router";
-import Notifier from "./components/Notifier";
-import Spinner from "./components/Spinner";
+import Notifier from "./components/base/Notifier";
+import Spinner from "./components/base/Spinner";
 import ToolbarLayout from "./components/Toolbar";
 import store from "./store/store";
 import { FiGrid } from "solid-icons/fi";

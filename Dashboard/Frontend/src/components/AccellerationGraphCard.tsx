@@ -1,5 +1,5 @@
 import { Component, createSignal } from "solid-js"
-import BaseGraphCard from "./GraphCard"
+import BaseGraphCard from "./base/GraphCard"
 import { AccellerationGraphCardProps } from "../models/ui/accelleration-graph-props";
 
 const AccellerationGraphCard: Component<AccellerationGraphCardProps> = (props) => {

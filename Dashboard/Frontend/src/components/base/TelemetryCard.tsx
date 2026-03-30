@@ -1,5 +1,5 @@
 import { ParentComponent, Show } from "solid-js"
-import { TelemetryCardProps } from "../models/ui/telemetry-card-props"
+import { TelemetryCardProps } from "../../models/ui/telemetry-card-props"
 
 const TelemetryCard: ParentComponent<TelemetryCardProps> = (props) => {
     return (

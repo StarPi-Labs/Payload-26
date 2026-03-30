@@ -1,8 +1,8 @@
 
 import { Component, Switch, Match, Show } from "solid-js"
 import { TbFillInfoCircle, TbFillAlertHexagon, TbFillCircleCheck, TbFillSquareX } from 'solid-icons/tb'
-import { Notification } from "../models/notification"
-import { NotificationType } from "../models/notification-type"
+import { Notification } from "../../models/notification"
+import { NotificationType } from "../../models/notification-type"
 
 
 const Notifier: Component<{ notification: Notification }> = (props) => {

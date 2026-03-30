@@ -1,5 +1,5 @@
 import { Component, createSignal, createEffect, createMemo, Show, For, on } from "solid-js";
-import { GraphCardProps } from "../models/ui/graph-card-props";
+import { GraphCardProps } from "../../models/ui/graph-card-props";
 import TelemetryCard from "./TelemetryCard";
 
 const GraphCard: Component<GraphCardProps> = (props) => {

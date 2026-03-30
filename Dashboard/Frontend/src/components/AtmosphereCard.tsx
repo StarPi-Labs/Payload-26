@@ -1,7 +1,7 @@
 import { Component } from "solid-js"
 import { AtmosphereCardProps } from "../models/ui/atmosphere-card-props"
-import TelemetryCard from "./TelemetryCard"
-import MetricStat from "./MetricStat"
+import TelemetryCard from "./base/TelemetryCard"
+import MetricStat from "./base/MetricStat"
 
 const AtmosphereCard: Component<AtmosphereCardProps> = (props) => {
     return (

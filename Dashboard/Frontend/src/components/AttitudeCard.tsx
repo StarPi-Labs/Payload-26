@@ -1,8 +1,8 @@
 import { Component } from "solid-js"
 import { AttitudeCardProps } from "../models/ui/attitude-card-props"
-import TelemetryCard from "./TelemetryCard"
-import MetricStat from "./MetricStat"
-import StatusChip from "./StatusChip"
+import TelemetryCard from "./base/TelemetryCard"
+import MetricStat from "./base/MetricStat"
+import StatusChip from "./base/StatusChip"
 
 const AttitudeCard: Component<AttitudeCardProps> = (props) => {
     return (

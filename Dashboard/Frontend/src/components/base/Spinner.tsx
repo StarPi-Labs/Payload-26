@@ -1,4 +1,4 @@
-import { Spinner as SpinnerModel } from "../models/spinner"
+import { Spinner as SpinnerModel } from "../../models/spinner"
 import { Component, Show } from "solid-js"
 
 const Spinner: Component<{ spinner: SpinnerModel }> = (props) => {

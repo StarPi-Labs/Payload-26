@@ -1,5 +1,5 @@
 import { Component } from "solid-js"
-import { StatusChipProps } from "../models/ui/status-chip-props"
+import { StatusChipProps } from "../../models/ui/status-chip-props"
 
 const StatusChip: Component<StatusChipProps> = (props) => {
     const label = () => {

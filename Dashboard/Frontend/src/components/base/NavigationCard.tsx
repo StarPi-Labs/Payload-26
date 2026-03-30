@@ -1,5 +1,5 @@
 import { Component } from "solid-js"
-import { NavigationCardProps } from "../models/ui/navigation-card-props"
+import { NavigationCardProps } from "../../models/ui/navigation-card-props"
 import TelemetryCard from "./TelemetryCard"
 import MetricStat from "./MetricStat"
 import StatusChip from "./StatusChip"

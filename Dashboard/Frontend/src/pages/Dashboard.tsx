@@ -1,11 +1,11 @@
 import { Component, createSignal, onCleanup } from "solid-js";
 import AttitudeCard from "../components/AttitudeCard";
 import AtmosphereCard from "../components/AtmosphereCard";
-import NavigationCard from "../components/NavigationCard";
+import NavigationCard from "../components/base/NavigationCard";
 import { AtmosphericSample } from "../models/atmospheric-sample";
 import VelocityGraphCard from "../components/VelocityGraphCard";
 import AltitudeGraphCard from "../components/AltitudeGraphCard";
-import VideoPlayer from "../components/VideoPlayer";
+import VideoPlayer from "../components/base/VideoPlayer";
 import AccellerationGraphCard from "../components/AccellerationGraphCard";
 import AltitudeTracker from "../components/AltitudeTracker";
 

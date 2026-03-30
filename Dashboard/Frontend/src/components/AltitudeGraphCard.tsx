@@ -1,6 +1,6 @@
 import { Component, createSignal } from "solid-js";
 import { AltitudeGraphCardProps } from "../models/ui/altitude-graph-props";
-import BaseGraphCard from "./GraphCard";
+import BaseGraphCard from "./base/GraphCard";
 
 const AltitudeGraphCard: Component<AltitudeGraphCardProps> = (props) => {
     const [showAltitude] = createSignal(true);
