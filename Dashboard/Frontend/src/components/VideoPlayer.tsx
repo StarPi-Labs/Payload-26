@@ -1,6 +1,6 @@
 import { Component, mergeProps, Show, For, createSignal, createEffect, onCleanup, createMemo } from "solid-js";
-import { MultiVideoPlayerProps } from "../../models/ui/video-player-props";
-import { VideoSource } from "../../models/videp-source";
+import { MultiVideoPlayerProps } from "../models/ui/video-player-props";
+import { VideoSource } from "../models/videp-source";
 
 // serve per agganciare il ref del singolo video
 const VideoTag: Component<{
