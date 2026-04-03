@@ -84,6 +84,7 @@ def handle_client(conn):
     data = conn.recv(1024).decode()
     # TODO: open port device
     dev_key = data.split("/raw_ws?dev=")[1].split(" HTTP")
+
     key = data.split('Sec-WebSocket-Key: ')[1].split('\r\n')[0]
     guid = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
     accept = base64.b64encode(hashlib.sha1((key + guid).encode()).digest()).decode()
@@ -98,7 +99,7 @@ def handle_client(conn):
 
     while ws_active:
         payload = empty_frame()
-        # TODO: fill payload
+        # TODO: fill payload with parsing
         packet = pack_telemetry(payload)
         conn.send(packet)
 
