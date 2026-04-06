@@ -1,6 +1,6 @@
 import serial
-
 import struct 
+from datetime import datetime
 
 # --- 1. PROTOCOL DEFINITION ---
 # Header: 3  bytes (Frame Separator) + 1 byte (Mode) + 4 (Timestamp) = 8 bytes
@@ -75,19 +75,77 @@ def parse_frame_stream(raw_data):
                 print(f"[{timestamp_ms} ms] {PACKET_DEFS[packet_type]['name']} Data: {payload_tuple}")
             buffer = buffer[total_packet_sz:]
 
+def proc_gps(ddict, draw):
+    """
+    - ddict: dictionary to fill
+    - draw: data raw in binary
+    """
+    try:
+        ddict['gpsLock']  = draw[0].decode('ascii').strip('\x00')
+        if ddict['gpsLock'] == 'V':
+            return
+
+        # Horizontal Velicity from Knots to km/h
+        nmea_field_str = draw[1].decode('ascii').strip('\x00')
+        if len(nmea_field_str) > 0:
+            ddict['horizontalVelocity'] = float(nmea_field_str)
+            ddict['horizontalVelocity'] *= 1.852
+        
+        # Course of Movement
+        nmea_field_str = draw[2].decode('ascii').strip('\x00')
+        if len(nmea_field_str) > 0:
+            ddict['course'] = float(nmea_field_str)
+
+        # GPS time "HHMMSS.ss" to Unix Timestamp 
+        nmea_field_str = draw[3].decode('ascii').strip('\x00')
+        if len(nmea_field_str) > 0:
+            dt = datetime.strptime(nmea_field_str, "%H%M%S.%f")
+            dt_now = datetime.now()
+            dt = dt.replace(year=dt_now.year, month=dt_now.month, day=dt_now.day)
+            ddict['time'] = dt.timestamp()
+
+        # GPS Latitude "DDMM.mmmmm" to float
+        nmea_field_str = draw[4].decode('ascii').strip('\x00')
+        if len(nmea_field_str) > 0:
+            ddict['gpsLat'] = float(nmea_field_str[:2]) + float(nmea_field_str[2:]) / 60
+
+        nmea_field_str = draw[5].decode('ascii').strip('\x00')
+        if len(nmea_field_str) > 0:
+            ddict['gpsLat_N'] = nmea_field_str
+
+        # GPS Longitud "DDDMM.mmmmm" to float
+        nmea_field_str   = draw[6].decode('ascii').strip('\x00')
+        if len(nmea_field_str) > 0:
+            ddict['gpsLon'] = float(nmea_field_str[:3]) + float(nmea_field_str[3:]) / 60
+    
+        nmea_field_str = draw[7].decode('ascii').strip('\x00')
+        if len(nmea_field_str) > 0:
+            ddict['gpsLon_W'] = nmea_field_str
+
+        nmea_field_str = draw[8].decode('ascii').strip('\x00')
+        if len(nmea_field_str) > 0:
+            ddict['sat_count']= int(nmea_field_str)
+
+    except UnicodeDecodeError:
+        ddict['frame-status'] = '0'
+        print(f"[{timestamp_ms} ms] GPS string corruption detected. Skipping payload.")
+
+
+gps_time_fix = 0.0
 def parse_frame_stream_bin(buffer):
+    data = []
     while True:
         sync_idx = buffer.find(b'\xaa\xaa\xaa')
 
         if sync_idx == -1:
             buffer = buffer[-2:] if len(buffer) >= 2 else buffer
-            return buffer
+            return buffer, data
 
         if sync_idx > 0:
             buffer = buffer[sync_idx:]
-
+        
         if len(buffer) < HEADER_SIZE:
-            return buffer
+            return buffer, data
         
         packet_type = buffer[3]
 
@@ -99,21 +157,25 @@ def parse_frame_stream_bin(buffer):
         total_packet_sz = HEADER_SIZE + payload_sz + FOOTER_SIZE
 
         if len(buffer) < total_packet_sz:
-            return buffer
+            return buffer, data
 
         packet_data = buffer[:total_packet_sz]
         calc_crc = calculate_crc16(packet_data[:-2])
         expected_crc = struct.unpack('<H', packet_data[-2:])[0]
 
-
-        """ # CRC-CALC
+        """ # TODO: CRC-CALC
         if calc_crc != expected_crc:
             print("CRC Failed")
             buffer.pop(0)
             continue
         """
 
-        timestamp_ms = struct.unpack('<I', packet_data[4:8])[0]
+        data.append({})
+        data[-1]['frame-status'] = '1'
+        timestamp_ms = struct.unpack('<I', packet_data[4:8])[0] 
+
+        data[-1]['sys-timestamp_ms'] = timestamp_ms
+
         payload_bytes = packet_data[8:-2]
         payload_tuple = struct.unpack(
             PACKET_DEFS[packet_type]['fmt'], 
@@ -121,38 +183,12 @@ def parse_frame_stream_bin(buffer):
         )
  
         if packet_type == 0x04: # GPS (ASCII)
-            try:
-                gps_data = {
-                    'status':     payload_tuple[0].decode('ascii').strip('\x00'),
-                    'speed':      payload_tuple[1].decode('ascii').strip('\x00'),
-                    'course':     payload_tuple[2].decode('ascii').strip('\x00'),
-                    'time':       payload_tuple[3].decode('ascii').strip('\x00'),
-                    'lat':        payload_tuple[4].decode('ascii').strip('\x00'),
-                    'lat_orient': payload_tuple[5].decode('ascii').strip('\x00'),
-                    'lon':        payload_tuple[6].decode('ascii').strip('\x00'),
-                    'lon_orient': payload_tuple[7].decode('ascii').strip('\x00'),
-                    'sat_count':  payload_tuple[8].decode('ascii').strip('\x00')
-                }
-
-                print(
-                    f"[{timestamp_ms} ms] GPS: "
-                    f"{gps_data['time']}, "
-                    f"{gps_data['lat']} {gps_data['lat_orient']}, "
-                    f"{gps_data['lon']} {gps_data['lon_orient']} | "
-                    f"Sats: {gps_data['sat_count']}"
-                )
-
-            except UnicodeDecodeError:
-                print(f"[{timestamp_ms} ms] GPS string corruption detected. Skipping payload.")
+            proc_gps(data[-1], payload_tuple)
 
         else:
            print(f"[{timestamp_ms} ms] {PACKET_DEFS[packet_type]['name']} Data: {payload_tuple}")
 
         buffer = buffer[total_packet_sz:]
-
-def dummy_stream():
-    # A perfectly packed IMU frame (Sync, Type, Timestamp, X, Y, Z, CRC)
-    yield b'\xaa\xaa\xaa\x01\xe8\x03\x00\x00' + struct.pack('<3f', 1.0, 2.5, 9.8) + b'\xff\xff'
 
 if __name__ == "__main__":
 
@@ -165,6 +201,4 @@ if __name__ == "__main__":
         if ser.in_waiting > 0:
             available = ser.read(ser.in_waiting)
             available = remainder + available
-            remainder = parse_frame_stream_bin(available)
-                
-
+            remainder, _ = parse_frame_stream_bin(available)

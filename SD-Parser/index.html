@@ -1,196 +1,231 @@
 <!DOCTYPE html>
-<!-- VIBECODED --> 
 <html>
 <head>
     <title>TERMINAL: HM-01</title>
     <style>
+        @import url('https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap');
+
         :root {
-            --neon-cyan: #00f2ff;
-            --dark-bg: #020b10;
-            --glow: 0 0 10px rgba(0, 242, 255, 0.7);
+            /* Material 3 Tonal Palette */
+            --md-bg: #F4F5F0;
+            --md-surface: #FFFFFF;
+            --md-surface-variant: #E1E3DF;
+            --md-on-surface: #1A1C19;
+            --md-on-surface-variant: #43483F;
+            --md-primary: #006A60;
+            --md-primary-container: #74F8E5;
+            --md-on-primary-container: #00201C;
+            --md-outline: #737974;
+            
+            /* Shapes & Elevation */
+            --radius-large: 24px;
+            --radius-full: 9999px;
+            --elevation-1: 0px 1px 3px 1px rgba(0, 0, 0, 0.05), 0px 1px 2px 0px rgba(0, 0, 0, 0.10);
+            --elevation-2: 0px 2px 6px 2px rgba(0, 0, 0, 0.08), 0px 1px 2px 0px rgba(0, 0, 0, 0.12);
         }
 
         body {
-            background-color: var(--dark-bg);
-            color: var(--neon-cyan);
-            font-family: 'Courier New', monospace;
+            background-color: var(--md-bg);
+            color: var(--md-on-surface);
+            font-family: 'Roboto', system-ui, -apple-system, sans-serif;
             margin: 0;
-            padding: 20px;
-            overflow: hidden;
-            text-transform: uppercase;
+            padding: 40px 20px;
+            display: flex;
+            justify-content: center;
         }
 
-        /* Scanline Effect Overlay */
-        body::before {
-            content: " ";
-            display: block;
-            position: absolute;
-            top: 0; left: 0; bottom: 0; right: 0;
-            background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.25) 50%), 
-                        linear-gradient(90deg, rgba(255, 0, 0, 0.06), rgba(0, 255, 0, 0.02), rgba(0, 0, 255, 0.06));
-            background-size: 100% 4px, 3px 100%;
-            pointer-events: none;
-            z-index: 10;
+        .container {
+            max-width: 900px;
+            width: 100%;
+            display: flex;
+            flex-direction: column;
+            gap: 24px;
+        }
+
+        header {
+            background-color: var(--md-surface);
+            padding: 24px 32px;
+            border-radius: var(--radius-large);
+            box-shadow: var(--elevation-1);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 16px;
         }
 
         h1 {
-            border-bottom: 2px solid var(--neon-cyan);
-            text-shadow: var(--glow);
-            letter-spacing: 5px;
+            margin: 0;
             font-size: 1.5rem;
+            font-weight: 500;
+            color: var(--md-on-surface);
+            letter-spacing: -0.02em;
+        }
+
+        .source-control {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            font-size: 0.875rem;
+            color: var(--md-on-surface-variant);
+            font-weight: 500;
+        }
+
+        select {
+            appearance: none;
+            background-color: var(--md-surface-variant);
+            color: var(--md-on-surface);
+            border: none;
+            padding: 10px 24px;
+            border-radius: var(--radius-full);
+            font-family: inherit;
+            font-size: 0.875rem;
+            font-weight: 500;
+            cursor: pointer;
+            outline: none;
+            transition: background-color 0.2s ease;
+            background-image: url("data:image/svg+xml;charset=US-ASCII,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%2224%22%20height%3D%2224%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22%2343483F%22%3E%3Cpath%20d%3D%22M7%2010l5%205%205-5z%22%2F%3E%3C%2Fsvg%3E");
+            background-repeat: no-repeat;
+            background-position: right 8px top 50%;
+            padding-right: 40px;
+        }
+
+        select:hover, select:focus {
+            background-color: #D5D7D3;
         }
 
         .grid {
             display: grid;
-            grid-template-columns: repeat(2, 1fr);
-            gap: 15px;
-            margin-top: 20px;
+            grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+            gap: 20px;
         }
 
         .box {
-            border: 1px solid var(--neon-cyan);
-            padding: 15px;
-            background: rgba(0, 242, 255, 0.05);
-            box-shadow: inset 0 0 15px rgba(0, 242, 255, 0.1);
+            background-color: var(--md-surface);
+            padding: 24px;
+            border-radius: var(--radius-large);
+            box-shadow: var(--elevation-1);
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            transition: transform 0.2s cubic-bezier(0.2, 0, 0, 1), box-shadow 0.2s cubic-bezier(0.2, 0, 0, 1);
         }
 
-        .label { font-size: 0.7rem; color: rgba(0, 242, 255, 0.8); margin-bottom: 5px; }
-        .val { font-size: 2.2rem; color: rgb(255, 242, 0); text-shadow: var(--glow); }
-        .unit { font-size: 0.8rem; margin-left: 5px; }
+        .box:hover {
+            transform: translateY(-2px);
+            box-shadow: var(--elevation-2);
+        }
+
+        .label {
+            font-size: 0.875rem;
+            font-weight: 500;
+            color: var(--md-on-surface-variant);
+            letter-spacing: 0.1px;
+        }
+
+        .data-row {
+            display: flex;
+            align-items: baseline;
+            gap: 8px;
+        }
+
+        .val {
+            font-size: 2.5rem;
+            font-weight: 400;
+            color: var(--md-primary);
+            line-height: 1.2;
+        }
+
+        .unit {
+            font-size: 1rem;
+            font-weight: 500;
+            color: var(--md-on-surface-variant);
+        }
 
         #status {
-            margin-top: 20px;
-            font-size: 0.8rem;
-            animation: blink 1s infinite;
+            background-color: var(--md-surface);
+            color: var(--md-on-surface-variant);
+            padding: 16px 24px;
+            border-radius: var(--radius-full);
+            box-shadow: var(--elevation-1);
+            font-size: 0.875rem;
+            font-weight: 500;
+            display: inline-flex;
+            align-items: center;
+            align-self: flex-start;
+            gap: 12px;
+            margin-top: 8px;
         }
 
-        @keyframes blink {
-            0% { opacity: 1; } 50% { opacity: 0.3; } 100% { opacity: 1; }
-        }
-
-        select {
-            background: black;
-            color: var(--neon-cyan);
-            border: 1px solid var(--neon-cyan);
-            font-family: monospace;
-            cursor: pointer;
+        #status::before {
+            content: '';
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background-color: var(--md-outline);
         }
     </style>
 </head>
 <body>
 
-    <header>
-        <h1>[ SYSTEM_HEALTH_V3 ]</h1>
-        <div style="margin-top: 10px;">
-            SOURCE: 
-            <select id="deviceSelect" onchange="startConnection()">
-                <option value="blt">RFCOMM_0 (BT)</option>
-                <option value="serial">TTY_USB0 (SERIAL)</option>
-            </select>
-        </div>
-    </header>
+    <div class="container">
+        <header>
+            <h1>System Health v3</h1>
+            <div class="source-control">
+                Source
+                <select id="deviceSelect" onchange="startConnection()">
+                    <option value="blt">RFCOMM_0 (BT)</option>
+                    <option value="serial">TTY_USB0 (SERIAL)</option>
+                </select>
+            </div>
+        </header>
 
-    <div class="grid">
-        <div class="box">
-            <div class="label">Time (UTC)</div>
-            <div id="utc" class="val">--:--:--</div>
+        <div class="grid">
+            <div class="box">
+                <div class="label">Time (UTC)</div>
+                <div class="data-row">
+                    <div id="utc" class="val">--:--:--</div>
+                </div>
+            </div>
+            <div class="box">
+                <div class="label">Nav Fix Status</div>
+                <div class="data-row">
+                    <div id="gps_status" class="val">--</div>
+                </div>
+            </div>
+            <div class="box">
+                <div class="label">Coordinate North</div>
+                <div class="data-row">
+                    <span id="lat" class="val">--.----</span> 
+                    <span id="lato" class="unit">-</span>
+                </div>
+            </div>
+            <div class="box">
+                <div class="label">Coordinate West</div>
+                <div class="data-row">
+                    <span id="lon" class="val">--.----</span> 
+                    <span id="lono" class="unit">-</span>
+                </div>
+            </div>
+            <div class="box">
+                <div class="label">Velocity</div>
+                <div class="data-row">
+                    <span id="gps_speed" class="val">0.0</span> 
+                    <span class="unit">km/h</span>
+                </div>
+            </div>
+            <div class="box">
+                <div class="label">Heading</div>
+                <div class="data-row">
+                    <span id="course" class="val">000</span> 
+                    <span class="unit">deg</span>
+                </div>
+            </div>
         </div>
-        <div class="box">
-            <div class="label">Nav Fix Status</div>
-            <div id="gps_status" class="val">--</div>
-        </div>
-        <div class="box">
-            <div class="label">Coordinate North</div>
-            <span id="lat" class="val">--.----</span> <span id="lato" class="unit">N</span>
-        </div>
-        <div class="box">
-            <div class="label">Coordinate West</div>
-            <span id="len" class="val">--.----</span> <span id="leno" class="unit">W</span>
-        </div>
-        <div class="box">
-            <div class="label">Velocity</div>
-            <span id="gps_speed" class="val">0.0</span> <span class="unit">KNOTS</span>
-        </div>
-        <div class="box">
-            <div class="label">Heading</div>
-            <span id="course" class="val">000</span> <span class="unit">DEG</span>
-        </div>
+
+        <div id="status">Link State: Disconnected</div>
     </div>
-
-    <div id="status">> LINK_STATE: DISCONNECTED</div>
-
-    <script>
-        let socket;
-        function startConnection() {
-            if (socket) socket.close();
-            const dev = document.getElementById('deviceSelect').value;
-            socket = new WebSocket(`ws://127.0.0.1:5000/raw_ws?dev=${dev}`);
-
-            const SCHEMA = [
-                { name: 'time',                type: 'f64' }, // 8 bytes
-                { name: 'altitude',            type: 'f32' }, // 4 bytes
-                { name: 'velocity',            type: 'f32' },
-                { name: 'horizontalVelocity',  type: 'f32' },
-                { name: 'acceleration',        type: 'f32' },
-                { name: 'accelerationX',       type: 'f32' },
-                { name: 'accelerationY',       type: 'f32' },
-                { name: 'accelerationZ',       type: 'f32' },
-                { name: 'temperature',         type: 'f32' },
-                { name: 'pressure',            type: 'f32' },
-                { name: 'humidity',            type: 'f32' },
-                { name: 'gpsLat',              type: 'f32' },
-                { name: 'gpsLon',              type: 'f32' },
-                { name: 'gpsLock',             type: 'f32' },
-                { name: 'pitch',               type: 'f32' },
-                { name: 'roll',                type: 'f32' },
-                { name: 'yaw',                 type: 'f32' }
-            ];
-
-            socket.onmessage = async (event) => {
-                const buffer = await event.data.arrayBuffer();
-                const view = new DataView(buffer);
-            
-                // Read the 32-bit mask (First 4 bytes)
-                const frame_info = view.getUint32(0, true);
-                let offset = 4;
-                const data = {};
-            
-                // 2. ITERATE THE SCHEMA
-                for (let i = 0; i < SCHEMA.length; i++) {
-                    if ((mask & (1 << i)) !== 0) {
-                        const field = SCHEMA[i];
-            
-                        if (field.type === 'f64') {
-                            data[field.name] = view.getFloat64(offset, true);
-                            offset += 8;
-                        } else {
-                            data[field.name] = view.getFloat32(offset, true);
-                            offset += 4;
-                        }
-                    }
-                }
-
-                /* Updating Dashboard */
-                if (data.time) {
-                    document.getElementById('utc').innerText = new Date(data.time * 1000).toISOString();
-                }
-
-                /* TODO: upload data
-                document.getElementById('lat').innerText = gps.lat;
-                document.getElementById('len').innerText = gps.lon;
-                document.getElementById('gps_status').innerText = gps.status;
-                document.getElementById('gps_speed').innerText = gps.speed;
-                document.getElementById('course').innerText = gps.course;
-                */
-                document.getElementById('status').innerText = "> LINK_STATE: ACTIVE";
-            };
-
-            socket.onclose = () => {
-                document.getElementById('status').innerText = "> LINK_STATE: RECONNECTING...";
-                setTimeout(startConnection, 2000);
-            };
-        }
-        startConnection();
-    </script>
+    <script type="module" src="telemetry-use.js"></script>
 </body>
 </html>
