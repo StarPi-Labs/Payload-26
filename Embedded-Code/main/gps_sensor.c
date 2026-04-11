@@ -226,9 +226,7 @@ void gps_rx_task(void *arg) {
     // TODO: 
     // - we might need to pass the system health instead, probabily, idk
     //   so we can flag it dead.
-    // - pass the GPS_UART port in arguments.
-    // - fix the waiting time
-    // - trigger data ready across tasks for gps_read.
+    // - fix the waiting time in uart_read_bytes
     uint8_t byte;
     uint8_t line_buf[GPS_MAX_SENTENCE_LEN];
     uint8_t attempts = 0;
@@ -260,9 +258,9 @@ void gps_rx_task(void *arg) {
             /* TODO: After parsed, this task should sleep for a second. */
             switch(tparams->context->mode) {
             case MODE_POST:
-            case MODE_SENSOR_CHECK:
+            case MODE_ARMED:
                 // This for debugging only
-                // TODO: send the defined frame
+                /*
                 ESP_LOGI(TAG,"Status %c, speed %s, course %s, time %s, lat %s %c, lon %s %c, sats %s", \
                     gps_info.status, \
                     gps_info.speed, \
@@ -274,6 +272,7 @@ void gps_rx_task(void *arg) {
                     gps_info.lon_orientation, \
                     gps_info.sat_count
                     );
+                */
 
                 telemetry_counter++;
                 if (telemetry_counter >= GPS_HM_SKIP_SAMPLES) {
@@ -288,22 +287,13 @@ void gps_rx_task(void *arg) {
                 }
                 break;
  
-            case MODE_ARMED:
-                telemetry_counter++;
-                if (telemetry_counter >= GPS_HM_SKIP_SAMPLES) {
-                    hm_send(
-                        tparams->hm_buffer, 
-                        SBIT_MQ10, 
-                        (void *)&gps_info, 
-                        sizeof(struct GPSInfo) - 1
-                    ); // the available field is not sent.
-                    telemetry_counter = 0;
-                    gps_info.available = 0;
-                }
-                break;
             case MODE_BOOST:
             case MODE_COAST:
-                write_to_ring_buffer(SBIT_MQ10, (void *)&gps_info, sizeof(struct GPSInfo));
+                write_to_ring_buffer(
+                    SBIT_MQ10, 
+                    (void *)&gps_info, 
+                    sizeof(struct GPSInfo)
+                );
                 break;
             }
             memset(&gps_info, 0, sizeof(struct GPSInfo));
@@ -361,22 +351,9 @@ esp_err_t gps_init(uart_port_t port) {
     return ESP_ERR_INVALID_RESPONSE;
 }
 
-
-esp_err_t gps_read(uint8_t *out_data)
-{
-    if (!s_new_data) {
-        return ESP_ERR_NOT_FOUND;
-    }
-    memcpy(out_data, s_sentence, s_sentence_len);
-    /* Zero-terminate for convenience (if caller treats it as string) */
-    out_data[s_sentence_len] = '\0';
-    s_new_data = false;
-    return ESP_OK;
-}
-
+// TODO: remove this drivers
 const sensor_driver_t gps_driver = {
     .name     = "GPS",
     .data_len = GPS_MAX_SENTENCE_LEN,
     .init     = NULL, // gps_init,
-    .read     = gps_read,
 };

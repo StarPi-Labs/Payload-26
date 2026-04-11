@@ -43,11 +43,4 @@ struct __attribute__((packed)) GPSInfo {
 esp_err_t gps_init(uart_port_t port);
 void gps_rx_task(void *arg);
 
-/**
- * Read the latest buffered NMEA line into out_data.
- * Returns ESP_OK if a line was available, ESP_ERR_NOT_FOUND if no new data.
- * `out_data` must be at least GPS_MAX_SENTENCE_LEN bytes.
- */
-esp_err_t gps_read(uint8_t *out_data);
-
 extern const sensor_driver_t gps_driver;
