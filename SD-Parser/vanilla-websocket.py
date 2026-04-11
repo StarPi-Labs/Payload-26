@@ -38,7 +38,10 @@ SCHEMA = {'time' :              'd',
           'gpsLock':            'c',
           'pitch':              'f',
           'roll':               'f',
-          'yaw':                'f'
+          'yaw':                'f',
+          'shunt_mVolts':       'f',
+          'bus_volts':          'f',
+          'current':            'f'
     }
 
 def empty_frame():
@@ -254,6 +257,7 @@ def hardware_handler():
 
     armed_file = None
     if stream_type == 'serial':
+
         src_stream = serial.Serial(src_stream_port, 115200, timeout=None)
         src_stream.reset_input_buffer()
         armed_file = open("armed_file.bin","wb")
@@ -269,9 +273,10 @@ def hardware_handler():
     timestamp_ms = -1
 
     while server_active:
+      try:
         ts = time.time()
         if stream_type == 'serial':
-            available = src_stream.read_until(b'\xaa\xaa\xaa')
+            available = src_stream.read(28)
         else:
             available = src_stream.read(10)
             if available is None:
@@ -291,6 +296,13 @@ def hardware_handler():
 
         with data_guard:
             updated_data = new_data
+      except Exception as e:
+        # Catch the parser crash, log it, and keep the thread alive!
+        print(f"\n[!] Frame parser choked! Error: {e}")
+        print(f"[!] Bad data chunk: {available}")
+        # Reset remainder so we don't poison the next frame
+        remainder = b''
+        continue
 
     print("Closing files...")
     src_stream.close()

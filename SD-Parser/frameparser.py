@@ -7,11 +7,17 @@ from datetime import datetime
 HEADER_SIZE = 8
 FOOTER_SIZE = 2 # CRC16
 
+# --- 2. INA219 CONFIGURATIONS ---
+INA219_MAX_VOLT = 16.0
+INA219_ADC_BITS = 2**12
+INA219_SHUNT_OMH= 0.1
+
+
 PACKET_DEFS = {
     0x01: {'name': 'MPU6050',   'fmt': '<3f', 'size': 12},
     0x02: {'name': 'BME680',    'fmt': '<3f', 'size': 12},
     0x04: {'name': 'MQ10',      'fmt': '<c10s10s10s11sc12sc4s', 'size': 60}, 
-    0x08: {'name': 'INA219',    'fmt': '<3f', 'size': 12}, # TODO: check it on the code
+    0x08: {'name': 'INA219',    'fmt': '<2h', 'size': 4}, # TODO: check it on the code
     0x10: {'name': 'SYSSTATE',  'fmt': '<d', 'size': 1}, # TODO: check it on the code
     0x20: {'name': 'RESERVED0', 'fmt': '<3f', 'size': 1}, # Reserved for future sensors
     0x40: {'name': 'RESERVED1', 'fmt': '<3f', 'size': 1}, # Reserved for future sensors
@@ -67,6 +73,7 @@ def parse_frame_stream(raw_data):
                 # Decode the raw bytes directly back into a Python string!
                 gps_string = payload_bytes.decode('ascii').strip()
                 print(f"[{timestamp_ms}] GPS: {gps_string}")
+
             else:
                 payload_tuple = struct.unpack(
                     PACKET_DEFS[packet_type]['fmt'], 
@@ -75,6 +82,24 @@ def parse_frame_stream(raw_data):
                 print(f"[{timestamp_ms} ms] {PACKET_DEFS[packet_type]['name']} Data: {payload_tuple}")
             buffer = buffer[total_packet_sz:]
 
+def proc_ina219(ddict, draw):
+
+    """
+    Processes data from the INA219 voltage and powere sensors:
+    Input:
+    - ddict: dictionary to fill
+    - draw: data raw in binary
+
+    ddict:
+    - shunt_mVolts: shunt voltage in milivolts
+    - bus_volts: Bus voltage in volts
+    - current: Bus current in amps
+    """
+    
+    ddict['shunt_mVolts'] = draw[0] / 100.0
+    ddict['bus_volts'] = draw[1] * INA219_MAX_VOLT / INA219_ADC_BITS
+    ddict['current'] = ddict['shunt_mVolts'] / INA219_SHUNT_OMH
+        
 def proc_gps(ddict, draw):
     """
     - ddict: dictionary to fill
@@ -181,10 +206,13 @@ def parse_frame_stream_bin(buffer):
             PACKET_DEFS[packet_type]['fmt'], 
             payload_bytes
         )
- 
+        
+        print(f"[{timestamp_ms} ms] {PACKET_DEFS[packet_type]['name']} Data: {payload_tuple}")
         if packet_type == 0x04: # GPS (ASCII)
             proc_gps(data[-1], payload_tuple)
 
+        elif packet_type == 0x08: # INA216
+            proc_ina219(data[-1], payload_tuple)
         else:
            print(f"[{timestamp_ms} ms] {PACKET_DEFS[packet_type]['name']} Data: {payload_tuple}")
 
@@ -193,12 +221,20 @@ def parse_frame_stream_bin(buffer):
 if __name__ == "__main__":
 
     remainder = b''
-    ser = serial.Serial('/dev/rfcomm0', 115200, timeout = 1100)
+    ser = serial.Serial('/dev/rfcomm0', 
+        115200, 
+        bytesize=serial.EIGHTBITS,
+        parity=serial.PARITY_NONE,
+        stopbits=serial.STOPBITS_ONE,
+        xonxoff=False,        # CRITICAL: Disable software flow control
+        rtscts=False,         # CRITICAL: Disable hardware flow control
+        dsrdtr=False          # CRITICAL: Disable hardware flow control
+    )
     #ser = serial.Serial('/dev/ttyUSB0', 115200, timeout = 1100)
     ser.reset_input_buffer()
-
+    
     while True:
-        if ser.in_waiting > 0:
-            available = ser.read(ser.in_waiting)
-            available = remainder + available
-            remainder, _ = parse_frame_stream_bin(available)
+        available = ser.read(28)
+        available = remainder + available
+        print(available)
+        remainder, _ = parse_frame_stream_bin(available)

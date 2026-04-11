@@ -27,7 +27,10 @@ export const TelemetryAPI = (function() {
         { name: 'gpsLock',            type: 'c'   },
         { name: 'pitch',              type: 'f32' },
         { name: 'roll',               type: 'f32' },
-        { name: 'yaw',                type: 'f32' }
+        { name: 'yaw',                type: 'f32' },
+        { name: 'shunt_mVolts',       type: 'f32' },
+        { name: 'bus_volt',           type: 'f32' },
+        { name: 'current',            type: 'f32' },
     ];
 
     function connect() {

@@ -171,7 +171,7 @@
 
     <div class="container">
         <header>
-            <h1>System Health v3</h1>
+            <h1>System Health v4</h1>
             <div class="source-control">
                 Source
                 <select id="deviceSelect" onchange="startConnection()">
@@ -220,6 +220,28 @@
                 <div class="data-row">
                     <span id="course" class="val">000</span> 
                     <span class="unit">deg</span>
+                </div>
+            </div>
+            
+            <div class="box">
+                <div class="label">Bus Voltage</div>
+                <div class="data-row">
+                    <span id="bus_voltage" class="val">0.00</span> 
+                    <span class="unit">V</span>
+                </div>
+            </div>
+            <div class="box">
+                <div class="label">Shunt Voltage</div>
+                <div class="data-row">
+                    <span id="shunt_voltage" class="val">0.00</span> 
+                    <span class="unit">mV</span>
+                </div>
+            </div>
+            <div class="box">
+                <div class="label">Current</div>
+                <div class="data-row">
+                    <span id="current" class="val">0.00</span> 
+                    <span class="unit">mA</span>
                 </div>
             </div>
         </div>

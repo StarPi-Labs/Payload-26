@@ -39,6 +39,18 @@ const unsubscribeData = TelemetryAPI.subscribeToData((newData) => {
         document.getElementById('course').innerText = newData.course.toFixed(6);
     }
 
+    if (newData.bus_volt) {
+        document.getElementById('bus_voltage').innerText = newData.bus_volt.toFixed(3);
+    }
+
+    if (newData.shunt_mVolts) {
+        document.getElementById('shunt_voltage').innerText = newData.shunt_mVolts.toFixed(3);
+    }
+
+    if (newData.current) {
+        document.getElementById('current').innerText = newData.current.toFixed(3);
+    }
+
 });
 
 const unsubscribeStatus = TelemetryAPI.subscribeToStatus((status) => {
