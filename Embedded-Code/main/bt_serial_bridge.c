@@ -45,6 +45,7 @@ static void bt_spp_cb(esp_spp_cb_event_t event, esp_spp_cb_param_t *param)
 
     case ESP_SPP_SRV_OPEN_EVT:
         s_spp_handle = param->srv_open.handle;
+        ESP_LOGI(TAG, "Real Handle %ld", s_spp_handle);
         s_bt_has_client = true;
         break;
 
@@ -91,6 +92,7 @@ bool bt_serial_init(const char *device_name)
     }
 
     esp_bt_controller_config_t bt_cfg = BT_CONTROLLER_INIT_CONFIG_DEFAULT();
+    // bt_cfg.mode = bt_mode;
     ret = esp_bt_controller_init(&bt_cfg);
     if (ret != ESP_OK && ret != ESP_ERR_INVALID_STATE) {
         ESP_LOGE(TAG, "bt controller init failed: %s", esp_err_to_name(ret));
@@ -146,6 +148,7 @@ bool bt_serial_init(const char *device_name)
     }
 
     s_bt_started = true;
+    // esp_bt_sleep_disable();
     ESP_LOGI(TAG, "Classic BT SPP initialized");
     return true;
 }
@@ -161,9 +164,11 @@ void bt_serial_write_byte(uint8_t byte)
 
 void bt_serial_write_chunk(uint8_t *data, uint16_t len) {
     if (!s_bt_started || !s_bt_has_client || s_spp_handle == 0 || len == 0) {
+        ESP_LOGI(TAG, "NOT sending, handle %ld", s_spp_handle);
         return;
     }
     
+    ESP_LOGI(TAG, "sending, handle %ld, %d", s_spp_handle, len);
     esp_err_t err = esp_spp_write(s_spp_handle, len, data);
     if (err != ESP_OK) {
         ESP_LOGI(TAG, "BT Write Failed! Err: %s\n", esp_err_to_name(err) ); 

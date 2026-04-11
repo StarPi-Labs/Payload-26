@@ -67,9 +67,13 @@ RTC_DATA_ATTR FlightRecord global_flight_record;
  *  Sensor registry — filled at boot from enabled drivers
  * ═══════════════════════════════════════════════════════════ */
 
-static const sensor_driver_t *s_sensors[MAX_SENSORS];
+
+// TODO: Remove
+// static const sensor_driver_t *s_sensors[MAX_SENSORS];
 static int s_num_sensors = 0;
 
+/*
+ * TODO: Remove
 static void register_sensor(const sensor_driver_t *drv)
 {
     if (s_num_sensors >= MAX_SENSORS) {
@@ -80,6 +84,7 @@ static void register_sensor(const sensor_driver_t *drv)
     ESP_LOGI(TAG, "Registered sensor [%d]: %s  (%d bytes/sample)",
              s_num_sensors - 1, drv->name, drv->data_len);
 }
+*/
 
 /* ═══════════════════════════════════════════════════════════
  *  Lock-free ring buffer  (single producer / single consumer)
@@ -155,8 +160,9 @@ static void task_sensor_read(void *arg)
 
     uint16_t frame_id = 0;
     frame_builder_t fb;
+    /* TODO: Remove
     uint8_t tmp[SENSOR_MAX_DATA_LEN];
-
+    */
     while (1) {
         /* Start new frame */
         frame_begin(&fb, frame_id);
@@ -207,32 +213,6 @@ static void task_sensor_read(void *arg)
             } else {
                 ESP_LOGW(TAG, "BME280 read failed: %s", esp_err_to_name(ret));
             }
-        }
-#endif
-
-        /* INA219: Power monitor data */
-#if CONFIG_ENABLE_INA219
-        if (sys->health & (1 << INA219_HEALTH)) {
-            uint8_t ina_data[8];
-            esp_err_t ret = ina219_read(ina_data);
-            if (ret == ESP_OK) {
-                frame_add_power(&fb, ina_data);
-            } else {
-                ESP_LOGW(TAG, "INA219 read failed: %s", esp_err_to_name(ret));
-            }
-        }
-#endif
-
-        /* GPS: Raw NMEA data */
-#if CONFIG_ENABLE_GPS
-        if (sys->health & (1 << GPS_HEALTH)) {
-            uint8_t gps_data[GPS_MAX_SENTENCE_LEN];
-            esp_err_t ret = gps_read(gps_data);
-            if (ret == ESP_OK) {
-                size_t gps_len = strnlen((char *)gps_data, GPS_MAX_SENTENCE_LEN);
-                frame_add_gps(&fb, gps_data, gps_len);
-            }
-            /* GPS_ERR_NOT_FOUND is normal when no new data */
         }
 #endif
 
@@ -319,7 +299,7 @@ void gps_start_task(System *sys) {
         "gps_rx", 
         4096, 
         (void *) &gps_params,
-        5, 
+        GPS_PRIORITY,
         &gps_handler, 
         GPS_CORE
     );
@@ -328,10 +308,34 @@ void gps_start_task(System *sys) {
     // sys->tasks.gps = &gps_handler;
 }
 
-void _sys_init(System *sys) {
+void ina219_start_task(System *sys) {
+    static TaskHandle_t ina219_handler = NULL;
+    static struct TaskParams ina219_params;
+
+    ina219_params.hm_buffer = sys->hm_buffer;
+    ina219_params.log_buffer = sys->log_buffer;
+    ina219_params.context = &sys->context;
+
+    xTaskCreatePinnedToCore(
+        ina219_task,
+        "ina219_task",
+        4096,
+        (void *) &ina219_params,
+        INA219_PRIORITY, 
+        &ina219_handler,
+        INA219_CORE
+    );
+}
+
+void sysP2I_init(System *sys) {
     sys->context.mode = MODE_INIT;
     sys->record = &global_flight_record;
     esp_reset_reason_t reason = esp_reset_reason();
+
+    bt_serial_init("GPS-Serial-Bluetooth");
+    vTaskDelay(pdMS_TO_TICKS(500));             // Compulsory attached to BLT 
+                                                // initialization, otherwise RF
+                                                // is affecting measurments.
 
     if (reason == ESP_RST_POWERON) {
         memset(sys->record, 0, sizeof(FlightRecord));
@@ -376,9 +380,11 @@ void _sys_init(System *sys) {
 #endif
 
 #if CONFIG_ENABLE_LORA
+    /* TODO: Remove: this is now Bluetooth
     // TODO: define this variables for LoRA
     err = sys_uart_init(LORA_UART, LORA_BAUD, LORA_TX, LORA_RX, LORA_TX_BUF, 0);
     sys->health |= (err == ESP_OK) << LORA_UART_HEALTH;
+    */
 #endif
 
 #if CONFIG_ENABLE_SD_CARD
@@ -396,7 +402,7 @@ void _sys_init(System *sys) {
 
 
 
-void sys_manager(void *args){
+void sys_manager(void *args) {
     System *sys = (System *) args;
     uint8_t active_events = 0;
 
@@ -419,7 +425,7 @@ void sys_manager(void *args){
     }
 }
 
-void sys_POST(System *sys){
+void sysP2I_POST(System *sys){
     /**
      * Power-On Self-Test
      * ------------------
@@ -441,11 +447,16 @@ void sys_POST(System *sys){
 
     if (sys->health & (1 << I2C1_HEALTH)) {
 #if CONFIG_ENABLE_BME680
-        if (ESP_OK == bme680_init(sys->port.bme_ina)) sys->health |= (1 << BME680_HEALTH);
+        if (ESP_OK == bme680_init(sys->port.bme_ina)) {
+            sys->health |= (1 << BME680_HEALTH);
+        }
 #endif
 
 #if CONFIG_ENABLE_INA219
-        if (ESP_OK == ina219_init(sys->port.bme_ina)) sys->health |= (1 << INA219_HEALTH);
+        if (ESP_OK == ina219_init(sys->port.bme_ina)) {
+            sys->health |= (1 << INA219_HEALTH);
+            ina219_start_task(sys); // Pin to core 1
+        }
 #endif
     }
 
@@ -454,7 +465,6 @@ void sys_POST(System *sys){
         if (ESP_OK == gps_init(GPS_UART)) {
             sys->health |= (1 << GPS_HEALTH);
             gps_start_task(sys); // pin to core 1, APP_CPU
-            // NOTE: I think GPS lock (numbers of sats connected can be visual things rather than waiting here for connection)
         }
     }
 #endif
@@ -486,13 +496,11 @@ void sys_POST(System *sys){
 void app_main(void)
 {   
     System sys;
-    _sys_init(&sys);
-    sys_POST(&sys);
+    sysP2I_init(&sys);
+    sysP2I_POST(&sys);
 
-    // TODO: SENSOR-CHECK, 
-    //      - manual buttom to check if all sensors are ok.
-    //      - This only happens when we are doing COLD start
-    //      - upon all sensors checked, go armed state
+    // NOTE: SENSOR-CHECK, 
+    //      - This is a visual inspection procedure.
     // TODO: IDLE/ARMED:
     //      - Health monitoring, sending small packets through LoRA every 30 seconds or so
     //      - A failure here triggers a WARM start: 
@@ -541,7 +549,7 @@ void app_main(void)
 
     /* ── 6. Heartbeat / watchdog loop ────────────────────── */
     while (1) {
-        ESP_LOGI(TAG, "Heartbeat | buf=%d bytes | sensors=%d",(int)ring_buffer_available(), s_num_sensors);
+        // ESP_LOGI(TAG, "Heartbeat | buf=%d bytes | sensors=%d",(int)ring_buffer_available(), s_num_sensors);
         vTaskDelay(pdMS_TO_TICKS(5000));
     }
 
