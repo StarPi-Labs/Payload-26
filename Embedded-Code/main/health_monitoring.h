@@ -4,6 +4,8 @@
 #include <stdint.h>
 #include <string.h>
 
+#include "bt_serial_bridge.h"
+
 typedef struct HMBuffer HMBuffer;
 
 HMBuffer * hm_buff_init(void);
