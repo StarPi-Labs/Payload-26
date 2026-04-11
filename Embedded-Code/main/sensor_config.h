@@ -27,10 +27,22 @@
 /*-- MPU6050 --*/
 #define MPU6050_SDA             CONFIG_I2C0_MASTER_SDA
 #define MPU6050_SCL             CONFIG_I2C0_MASTER_SCL
+#define MPU6050_CORE            1
+#define MPU6050_PRIORITY        5                       // Highest Priority
 
 /*-- BME680/INA219 --*/
 #define BME_INA_SDA             CONFIG_I2C1_MASTER_SDA
 #define BME_INA_SCL             CONFIG_I2C1_MASTER_SCL
+#define INA219_CORE             1
+#define BME680_CORE             1
+#define BME680_PRIORITY         4                       // Medium Priority
+#define INA219_PRIORITY         3                       // Lowest Priority
+#define INA219_PERIOD_100ms     100                     // 10Hz
+#define INA219_PERIOD_1s        1000                    // 1Hz
+#define INA219_HM_SKIP_SAMPLES  10                      // TODO: right now this 
+                                                        // can be sampled @ 1.8kHz
+                                                        // however, for this application
+                                                        // Sampled is capped to 10Hz
 
 /*-- GPS UART --*/
 #define GPS_UART                UART_NUM_2
@@ -38,11 +50,13 @@
 #define GPS_RX                  CONFIG_GPS_RXD_PIN
 #define GPS_BAUD                CONFIG_GPS_BAUD_RATE
 #define GPS_RX_BUF_SZ           1024
-#define GPS_CORE                1
+#define GPS_CORE                0
+#define GPS_PRIORITY            1                       // Low priority, it is slow
 #define GPS_HM_SKIP_SAMPLES     2                      // Skip samples while on Health Monitor
 
 /*-- HEALTH_MONITOR UART --*/
-// NOTE:
+// NOTE: Deprecated
+// TODO: Remove it
 // - Debugging  -> USB-Serial
 // - Deployment -> LoRA
 #define HEALTH_MONITOR_UART     UART_NUM_0              // Debugging purposes

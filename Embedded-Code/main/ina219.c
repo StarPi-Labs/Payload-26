@@ -17,32 +17,43 @@
 #include "i2c_bus.h"
 #include "esp_log.h"
 
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+
+#include "systemp2i.h"
+
 static const char *TAG = "ina219";
 
 /* I2C address (Adafruit default with no jumpers) */
 #define INA219_ADDR             0x40
 
 /* Register addresses */
-#define REG_CONFIG              0x00
-#define REG_SHUNT_VOLTAGE       0x01
-#define REG_BUS_VOLTAGE         0x02
-#define REG_POWER               0x03
-#define REG_CURRENT             0x04
-#define REG_CALIBRATION         0x05
-#define VAL_DEFAULT_CONFIG      0x399F
+#define INA219_REG_CONFIG       0x00
+#define INA219_REG_SHUNT_VOLT   0x01
+#define INA219_REG_BUS_VOLT     0x02
+#define INA219_REG_POWER        0x03
+#define INA219_REG_CURRENT      0x04
+#define INA219_REG_CALIBRATION  0x05
+
+#define INA219_CONFIG_ON_RESET  0x399F
+#define INA219_SW_RESET         0x8000
 
 /* Configuration register bits */
-#define CONFIG_RESET            (1 << 15)
-#define CONFIG_BRNG_32V         (1 << 13)   /* Bus voltage range 32V */
-#define CONFIG_PGA_320MV        (0x3 << 11) /* Shunt voltage range ±320mV */
-#define CONFIG_BADC_12BIT       (0x3 << 7)  /* Bus ADC 12-bit */
-#define CONFIG_SADC_12BIT       (0x3 << 3)  /* Shunt ADC 12-bit */
-#define CONFIG_MODE_CONTINUOUS  0x07        /* Shunt + bus, continuous */
+#define INA219_BRNG_16v         (0 << 13)   // Max./min. Bus voltage +/-16v 
+#define INA219_PGA_80mV         (0x3 << 11) // Max./min. Shunt voltage +/-80mV, 
+                                            // Max./min. Current@0.1Omh 0.8A
+#define INA219_BADC_12BIT       (0x3 << 7)  // Bus ADC 12-bit, Sampling Period: 532us
+#define INA219_SADC_12BIT       (0x3 << 3)  // Shunt ADC 12-bit, Sampling Period: 532us
+#define INA219_MODE_CONTINUOUS  0x07        // Shunt + bus, continuous 
 
-/* Default config: 32V, 320mV, 12-bit, continuous */
-#define INA219_CONFIG_DEFAULT   (CONFIG_BRNG_32V | CONFIG_PGA_320MV | \
-                                 CONFIG_BADC_12BIT | CONFIG_SADC_12BIT | \
-                                 CONFIG_MODE_CONTINUOUS)
+/* Default config: 16V, 80mV, 12-bit, continuous */
+#define INA219_SYSTEMp2i_CONFIG (INA219_BRNG_16v | \
+                                 INA219_PGA_80mV | \
+                                 INA219_BADC_12BIT | \
+                                 INA219_SADC_12BIT | \
+                                 INA219_MODE_CONTINUOUS)
+
+#define INA219_MAX_FAILED_ATTEMPTS  60
 
 /*
  * Calibration for 0.1Ω shunt resistor (Adafruit INA219 breakout):
@@ -62,7 +73,6 @@ static const char *TAG = "ina219";
 
 /* Bus voltage: 4 mV per LSB (from datasheet), bits [15:3] */
 #define BUS_LSB_MV              4
-
 #define INA219_DATA_LEN         8
 
 static i2c_master_dev_handle_t s_dev = NULL;
@@ -105,57 +115,150 @@ esp_err_t ina219_init(i2c_master_bus_handle_t bus) {
      * bus it got bit-banged)
      */
 
-    /* Ping device */
+    /* Ping device { */
     /* 1. Reset the device */
-    ret = ina219_write_reg16(REG_CONFIG, CONFIG_RESET);
+    ret = ina219_write_reg16(INA219_REG_CONFIG, INA219_SW_RESET);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to connect with sensor, reset failed: %s", esp_err_to_name(ret));
         return ret;
     }
-    vTaskDelay(pdMS_TO_TICKS(1)); /* TODO: check, is it ok 1 or better 2 
-                                     Wait for reset */
+    vTaskDelay(pdMS_TO_TICKS(1)); /* NOTE: 1 seems to be OK */
 
     /* 2. Read default configuration */
     uint16_t config_default = 0;
-    ret = ina219_read_reg16(REG_CONFIG, &config_default);
+    ret = ina219_read_reg16(INA219_REG_CONFIG, &config_default);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to read default configuration: %s", esp_err_to_name(ret));
         return ret;
     }
 
     /* 3. Is it the default value though? */
-    if (config_default != VAL_DEFAULT_CONFIG) {
-        ESP_LOGE(TAG, "Wrong Sensor or device damanged: Expected 0x%04X, got 0x%04X", VAL_DEFAULT_CONFIG, config_default);
+    if (config_default != INA219_CONFIG_ON_RESET) {
+        ESP_LOGE(TAG, "Wrong Sensor or device damanged: Expected 0x%04X, got 0x%04X", INA219_CONFIG_ON_RESET, config_default);
         return ESP_ERR_INVALID_RESPONSE;
     }
+    /* END Ping } */
+
+    // Configure the Device
+    ret = ina219_write_reg16(INA219_REG_CONFIG, INA219_SYSTEMp2i_CONFIG);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Config write failed: %s", esp_err_to_name(ret));
+        return ret;
+    }
+
     return ret;
+}
+
+/* ── INA219 background task ─────────────────────────────────── */
+uint8_t read_shunt_bus_volts(uint8_t *sv, uint8_t *bv, uint8_t attempts) {
+    esp_err_t ret = i2c_bus_read_bytes(s_dev, INA219_REG_SHUNT_VOLT, sv, 2);
+    if (ret != ESP_OK) {
+        attempts++;
+        return attempts;
+    }
+    ret = i2c_bus_read_bytes(s_dev, INA219_REG_BUS_VOLT, bv, 2);
+    if (ret != ESP_OK) {
+        attempts++;
+        return attempts;
+    }
+    return 0;
+}
+ 
+struct __attribute__((packed)) INA219Info {
+    int16_t shunt_voltage;
+    int16_t bus_voltage;
+};
+typedef union {
+    struct __attribute__((packed)) {
+        int16_t shunt_voltage;
+        int16_t bus_voltage;
+    } values;
+    uint32_t raw_all; // This forces 4-byte alignment for the union
+} ina_data_t;
+
+void ina219_task(void *arg) {
+    uint8_t shunt_volt[2] = {0xC, 0xA}, bus_volt[2] = {0xF, 0xE};
+    uint8_t attempts = 0;
+    uint16_t telemetry_counter = 0;
+    //ina_data_t ina219_info;
+    struct INA219Info ina219_info;
+    struct TaskParams *tparams = (struct TaskParams *) arg;
+    TickType_t xLastWakeTime = xTaskGetTickCount();
+    //ina219_info.raw_all = 0;
+    // TODO:
+    // - we need to protect the bus
+    // - we need to pass the pass in the task params along side its mutex to protect 
+    //   the bus. Otherwise it may cause problems when appending the BME680
+
+    while(1) {
+        attempts = read_shunt_bus_volts(shunt_volt, bus_volt, attempts);
+
+        if (INA219_MAX_FAILED_ATTEMPTS == attempts) {
+            // TODO: should I report this event? INA219 down?
+            break;
+        }
+
+        ina219_info.shunt_voltage = (int16_t)((shunt_volt[0] << 8) | shunt_volt[1]);
+        ina219_info.bus_voltage   = (int16_t)((bus_volt[0] << 8) | bus_volt[1]);
+        ina219_info.bus_voltage   = ina219_info.bus_voltage >> 3;
+
+        // ESP_LOGI(TAG, "Vs = %d, Vb = %d", ina219_info.values.shunt_voltage, ina219_info.values.bus_voltage);
+        switch(tparams->context->mode) {
+        case MODE_POST:
+        case MODE_ARMED:
+            telemetry_counter++;
+            if (telemetry_counter >= INA219_HM_SKIP_SAMPLES) {
+                // ESP_LOGI(TAG, "Vs = %d, Vb = %d", ina219_info.values.shunt_voltage, ina219_info.values.bus_voltage);
+                hm_send(
+                    tparams->hm_buffer,
+                    SBIT_INA219,
+                    (uint8_t *) &ina219_info,
+                    sizeof(struct INA219Info)
+                );
+                telemetry_counter = 0;
+            }
+            break;
+        case MODE_BOOST:
+        case MODE_COAST:
+            write_to_ring_buffer(
+                SBIT_INA219, 
+                (void *) &ina219_info, 
+                sizeof(struct INA219Info)
+            );
+
+            break;
+        }
+        memset(&ina219_info, 0, sizeof(struct INA219Info));
+        vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(INA219_PERIOD_100ms));
+    }
 }
 
 esp_err_t ina219_config(void)
 {
-    /* Reset the device */
-    ret = ina219_write_reg16(REG_CONFIG, CONFIG_RESET);
+    /*
+    // Reset the device 
+    esp_err_t ret = ina219_write_reg16(REG_CONFIG, CONFIG_RESET);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Reset failed: %s", esp_err_to_name(ret));
         return ret;
     }
-    vTaskDelay(pdMS_TO_TICKS(1)); /* Wait for reset */
+    vTaskDelay(pdMS_TO_TICKS(1)); // Wait for reset 
 
-    /* Apply configuration */
+    // Apply configuration 
     ret = ina219_write_reg16(REG_CONFIG, INA219_CONFIG_DEFAULT);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Config write failed: %s", esp_err_to_name(ret));
         return ret;
     }
 
-    /* Set calibration register for current/power readings */
+    // Set calibration register for current/power readings 
     ret = ina219_write_reg16(REG_CALIBRATION, INA219_CALIBRATION);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Calibration write failed: %s", esp_err_to_name(ret));
         return ret;
     }
 
-    /* Verify calibration was written */
+    // Verify calibration was written
     uint16_t cal_readback = 0;
     ret = ina219_read_reg16(REG_CALIBRATION, &cal_readback);
     if (ret == ESP_OK) {
@@ -165,36 +268,7 @@ esp_err_t ina219_config(void)
 
     ESP_LOGI(TAG, "INA219 initialised @ 0x%02X (0.1Ω shunt, ±3.2A range)", INA219_ADDR);
     return ESP_OK;
-}
-
-esp_err_t ina219_read(uint8_t *out_data)
-{
-    uint16_t shunt, bus, power, current;
-    esp_err_t ret;
-
-    /* Read all four measurement registers */
-    ret = ina219_read_reg16(REG_SHUNT_VOLTAGE, &shunt);
-    if (ret != ESP_OK) return ret;
-
-    ret = ina219_read_reg16(REG_BUS_VOLTAGE, &bus);
-    if (ret != ESP_OK) return ret;
-
-    ret = ina219_read_reg16(REG_POWER, &power);
-    if (ret != ESP_OK) return ret;
-
-    ret = ina219_read_reg16(REG_CURRENT, &current);
-    if (ret != ESP_OK) return ret;
-
-    /* Pack into output buffer (big-endian) */
-    out_data[0] = (uint8_t)(shunt >> 8);
-    out_data[1] = (uint8_t)(shunt & 0xFF);
-    out_data[2] = (uint8_t)(bus >> 8);
-    out_data[3] = (uint8_t)(bus & 0xFF);
-    out_data[4] = (uint8_t)(power >> 8);
-    out_data[5] = (uint8_t)(power & 0xFF);
-    out_data[6] = (uint8_t)(current >> 8);
-    out_data[7] = (uint8_t)(current & 0xFF);
-
+    */
     return ESP_OK;
 }
 
@@ -240,6 +314,6 @@ int32_t ina219_get_current_ua(const uint8_t *data)
 const sensor_driver_t ina219_driver = {
     .name     = "INA219",
     .data_len = INA219_DATA_LEN,
-    .init     = ina219_init,
-    .read     = ina219_read,
+    .init     = NULL,
+    .read     = NULL,
 };
