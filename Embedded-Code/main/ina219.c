@@ -221,6 +221,7 @@ void ina219_task(void *arg) {
         case MODE_BOOST:
         case MODE_COAST:
             write_to_ring_buffer(
+                tparams->log_buffer, 
                 SBIT_INA219, 
                 (void *) &ina219_info, 
                 sizeof(struct INA219Info)
@@ -229,7 +230,7 @@ void ina219_task(void *arg) {
             break;
         }
         memset(&ina219_info, 0, sizeof(struct INA219Info));
-        vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(INA219_PERIOD_100ms));
+        vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(INA219_PERIOD_default));
     }
 }
 

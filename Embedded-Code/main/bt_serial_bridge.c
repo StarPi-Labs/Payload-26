@@ -164,11 +164,9 @@ void bt_serial_write_byte(uint8_t byte)
 
 void bt_serial_write_chunk(uint8_t *data, uint16_t len) {
     if (!s_bt_started || !s_bt_has_client || s_spp_handle == 0 || len == 0) {
-        ESP_LOGI(TAG, "NOT sending, handle %ld", s_spp_handle);
         return;
     }
     
-    ESP_LOGI(TAG, "sending, handle %ld, %d", s_spp_handle, len);
     esp_err_t err = esp_spp_write(s_spp_handle, len, data);
     if (err != ESP_OK) {
         ESP_LOGI(TAG, "BT Write Failed! Err: %s\n", esp_err_to_name(err) ); 

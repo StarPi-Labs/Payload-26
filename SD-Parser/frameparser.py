@@ -6,6 +6,7 @@ from datetime import datetime
 # Header: 3  bytes (Frame Separator) + 1 byte (Mode) + 4 (Timestamp) = 8 bytes
 HEADER_SIZE = 8
 FOOTER_SIZE = 2 # CRC16
+gps_time_fix = 0.0  # carries the GPS time: TODO: implement synchronization
 
 # --- 2. INA219 CONFIGURATIONS ---
 INA219_MAX_VOLT = 16.0
@@ -25,62 +26,8 @@ PACKET_DEFS = {
 }
 
 def calculate_crc16(data: bytes) -> int:
+    # TODO: implement this heheh
     return 0xFFFF
-
-def parse_frame_stream(raw_data):
-    buffer = bytearray()
-    print(buffer)
-    for chunk in raw_data:
-        buffer.extend(chunk)
-        while True:
-            sync_idx = buffer.find(b'\xaa\xaa\xaa')
-
-            if sync_idx == -1:
-                buffer = buffer[-2] if len(buffer) >= 2 else buffer
-                break
-
-            if sync_idx > 0:
-                buffer = buffer[sync_idx:]
-
-            if len(buffer) < HEADER_SIZE:
-                break;
-            
-            packet_type = buffer[3]
-
-            if packet_type not in PACKET_DEFS:
-                buffer.pop(0)
-                continue 
-
-            payload_sz = PACKET_DEFS[packet_type]['size']
-            total_packet_sz = HEADER_SIZE + payload_sz + FOOTER_SIZE
-
-            if len(buffer) < total_packet_sz:
-                break
-
-            packet_data = buffer[:total_packet_sz]
-            calc_crc = calculate_crc16(packet_data[:-2])
-            expected_crc = struct.unpack('<H', packet_data[-2:])[0]
-
-            if calc_crc != expected_crc:
-                print("CRC Failed")
-                buffer.pop(0)
-                continue
-
-            timestamp_ms = struct.unpack('<I', packet_data[4:8])[0]
-            payload_bytes = packet_data[8:-2]
-
-            if packet_type == 0x02: # GPS (ASCII)
-                # Decode the raw bytes directly back into a Python string!
-                gps_string = payload_bytes.decode('ascii').strip()
-                print(f"[{timestamp_ms}] GPS: {gps_string}")
-
-            else:
-                payload_tuple = struct.unpack(
-                    PACKET_DEFS[packet_type]['fmt'], 
-                    payload_bytes
-                )
-                print(f"[{timestamp_ms} ms] {PACKET_DEFS[packet_type]['name']} Data: {payload_tuple}")
-            buffer = buffer[total_packet_sz:]
 
 def proc_ina219(ddict, draw):
 
@@ -156,7 +103,6 @@ def proc_gps(ddict, draw):
         print(f"[{timestamp_ms} ms] GPS string corruption detected. Skipping payload.")
 
 
-gps_time_fix = 0.0
 def parse_frame_stream_bin(buffer):
     data = []
     while True:
@@ -213,6 +159,7 @@ def parse_frame_stream_bin(buffer):
 
         elif packet_type == 0x08: # INA216
             proc_ina219(data[-1], payload_tuple)
+
         else:
            print(f"[{timestamp_ms} ms] {PACKET_DEFS[packet_type]['name']} Data: {payload_tuple}")
 
@@ -236,5 +183,4 @@ if __name__ == "__main__":
     while True:
         available = ser.read(28)
         available = remainder + available
-        print(available)
         remainder, _ = parse_frame_stream_bin(available)

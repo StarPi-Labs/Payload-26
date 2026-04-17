@@ -39,8 +39,6 @@ static const char *TAG = "GPS";
 
 
 /* Double-buffered latest NMEA sentence */
-static uint8_t  s_sentence[GPS_MAX_SENTENCE_LEN];
-static size_t   s_sentence_len = 0;
 static volatile bool s_new_data = false;
 
 #define MAX_FAILED_ATTEMPTS     5   // if the GPS' uart fails to read 5 
@@ -228,7 +226,6 @@ void gps_rx_task(void *arg) {
     //   so we can flag it dead.
     // - fix the waiting time in uart_read_bytes
     uint8_t byte;
-    uint8_t line_buf[GPS_MAX_SENTENCE_LEN];
     uint8_t attempts = 0;
     uint8_t telemetry_counter = 0;
     struct GPSInfo gps_info = {0};
@@ -290,6 +287,7 @@ void gps_rx_task(void *arg) {
             case MODE_BOOST:
             case MODE_COAST:
                 write_to_ring_buffer(
+                    tparams->log_buffer,
                     SBIT_MQ10, 
                     (void *)&gps_info, 
                     sizeof(struct GPSInfo)
