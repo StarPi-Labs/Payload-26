@@ -107,6 +107,9 @@ typedef struct {
     uint16_t sensor_bitmap;     /**< Which sensors are present */
 } frame_builder_t;
 
+esp_err_t logging_init(FILE **file, char *filename);
+void logging_task(void *arg);
+
 /**
  * Initialize a frame builder and write separator + header placeholder.
  * Call this first for each new frame.
@@ -258,4 +261,4 @@ void send_telemetry(uint8_t packet, void *data, uint16_t payload_size);
 
 typedef struct LoggerBuffer LoggerBuffer;
 LoggerBuffer *logger_buff_init(void);
-void write_to_ring_buffer(uint8_t packet, void *data, uint16_t payload_size);
+void write_to_ring_buffer(struct LoggerBuffer *buf, uint8_t type, void *payload, uint16_t payload_size);

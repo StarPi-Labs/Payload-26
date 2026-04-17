@@ -57,34 +57,12 @@
 
 /* Frame logger types are always needed for building frames */
 #include "frame_logger.h"
+#include "sdif.h"
 
 static const char *TAG = "main";
 
 /* Global Variables */
 RTC_DATA_ATTR FlightRecord global_flight_record;
-
-/* ═══════════════════════════════════════════════════════════
- *  Sensor registry — filled at boot from enabled drivers
- * ═══════════════════════════════════════════════════════════ */
-
-
-// TODO: Remove
-// static const sensor_driver_t *s_sensors[MAX_SENSORS];
-static int s_num_sensors = 0;
-
-/*
- * TODO: Remove
-static void register_sensor(const sensor_driver_t *drv)
-{
-    if (s_num_sensors >= MAX_SENSORS) {
-        ESP_LOGE(TAG, "Too many sensors (max %d)", MAX_SENSORS);
-        return;
-    }
-    s_sensors[s_num_sensors++] = drv;
-    ESP_LOGI(TAG, "Registered sensor [%d]: %s  (%d bytes/sample)",
-             s_num_sensors - 1, drv->name, drv->data_len);
-}
-*/
 
 /* ═══════════════════════════════════════════════════════════
  *  Lock-free ring buffer  (single producer / single consumer)
@@ -160,9 +138,7 @@ static void task_sensor_read(void *arg)
 
     uint16_t frame_id = 0;
     frame_builder_t fb;
-    /* TODO: Remove
-    uint8_t tmp[SENSOR_MAX_DATA_LEN];
-    */
+
     while (1) {
         /* Start new frame */
         frame_begin(&fb, frame_id);
@@ -325,20 +301,121 @@ void ina219_start_task(System *sys) {
         &ina219_handler,
         INA219_CORE
     );
+
+    // TODO: link this task to the system:
+    // sys->tasks.ina216 = ina219_handler;
 }
+
+#include "esp_timer.h" // For microsecond-accurate timing
+
+void sd_benchmark_task(void *pvParameters) {
+    ESP_LOGI("BENCHMARK", "Starting SD Card Write Speed Test...");
+
+    // 1. Create a 4KB dummy buffer and fill it with test data (0xAA)
+    const size_t buffer_size = 4096;
+    uint8_t *dummy_buffer = malloc(buffer_size);
+    memset(dummy_buffer, 0xAA, buffer_size);
+
+    // 2. Open the file and disable C-buffering (like we discussed)
+    FILE *f = fopen("/sdcard/bench.bin", "w");
+    if (f == NULL) {
+        ESP_LOGE("BENCHMARK", "Failed to open file!");
+        free(dummy_buffer);
+        vTaskDelete(NULL);
+        return;
+    }
+    setvbuf(f, NULL, _IONBF, 0);
+
+    // 3. Set up the test parameters
+    const int iterations = 1000; // 1000 writes * 4KB = ~4 Megabytes
+    int successful_writes = 0;
+
+    ESP_LOGI("BENCHMARK", "Writing %d MB of data...", (iterations * buffer_size) / (1024 * 1024));
+
+    // --- START THE STOPWATCH ---
+    int64_t start_time_us = esp_timer_get_time();
+
+    for (int i = 0; i < iterations; i++) {
+        size_t written = fwrite(dummy_buffer, 1, buffer_size, f);
+        if (written == buffer_size) {
+            successful_writes++;
+        }
+    }
+
+    // --- STOP THE STOPWATCH ---
+    int64_t end_time_us = esp_timer_get_time();
+
+    // 4. Safely close the file and free RAM
+    fclose(f);
+    free(dummy_buffer);
+
+    // 5. Calculate the results
+    int64_t time_taken_us = end_time_us - start_time_us;
+    float time_taken_sec = (float)time_taken_us / 1000000.0f;
+
+    uint32_t total_bytes_written = successful_writes * buffer_size;
+    float kilobytes_written = (float)total_bytes_written / 1024.0f;
+
+    float speed_kbs = kilobytes_written / time_taken_sec;
+
+    // 6. Print the glorious results
+    ESP_LOGI("BENCHMARK", "=== RESULTS ===");
+    ESP_LOGI("BENCHMARK", "Total Time: %.2f seconds", time_taken_sec);
+    ESP_LOGI("BENCHMARK", "Data Written: %.2f KB", kilobytes_written);
+    ESP_LOGI("BENCHMARK", "Average Speed: %.2f KB/s", speed_kbs);
+    ESP_LOGI("BENCHMARK", "===============");
+
+    vTaskDelete(NULL);
+}
+
+void logging_start_task(System *sys) {
+    // TODO:
+    // do not open the run the task yet, because the file is open.
+    // test writing the into the sd card here. several times until 
+    // the sdcards stops.
+    // we need to close the file, because file is open
+    static TaskHandle_t logging_handle = NULL;
+    static struct TaskParams params;
+
+    params.hm_buffer = NULL;
+    params.log_buffer = sys->log_buffer;
+    params.context = NULL;
+    params.args = (void *)&sys->open_log_file;
+    
+    /*
+    fprintf(sys->open_log_file, "Temperature: 24.5C, humidity: 50");
+    fclose(sys->open_log_file);
+    sys_fs_unmount(sys->card);
+    */
+
+    /*
+    xTaskCreatePinnedToCore(
+        logging_task,
+        "logging_task",
+        4096,
+        (void *)&params,
+        LOGGING_PRIORITY,
+        &logging_handle,
+        LOGGING_CORE
+    );
+    */
+
+    // TODO: link this task to the system:
+    // sys->tasks.logging = logging_handle;
+}
+
+//--- System Functions --//
 
 void sysP2I_init(System *sys) {
     sys->context.mode = MODE_INIT;
     sys->record = &global_flight_record;
     esp_reset_reason_t reason = esp_reset_reason();
 
-    bt_serial_init("GPS-Serial-Bluetooth");
-    vTaskDelay(pdMS_TO_TICKS(500));             // Compulsory attached to BLT 
-                                                // initialization, otherwise RF
-                                                // is affecting measurments.
-
     if (reason == ESP_RST_POWERON) {
         memset(sys->record, 0, sizeof(FlightRecord));
+        bt_serial_init("GPS-Serial-Bluetooth");
+        vTaskDelay(pdMS_TO_TICKS(500)); // Compulsory attached to BLT initialization, 
+                                        // otherwise RF might affect measurments.
     } else {
         esp_log_level_set("*", ESP_LOG_NONE);   /* Kill logs, no need if we are 
                                                  * in flight. 
@@ -379,17 +456,9 @@ void sysP2I_init(System *sys) {
     sys->health |= (err == ESP_OK) << GPS_UART_HEALTH;
 #endif
 
-#if CONFIG_ENABLE_LORA
-    /* TODO: Remove: this is now Bluetooth
-    // TODO: define this variables for LoRA
-    err = sys_uart_init(LORA_UART, LORA_BAUD, LORA_TX, LORA_RX, LORA_TX_BUF, 0);
-    sys->health |= (err == ESP_OK) << LORA_UART_HEALTH;
-    */
-#endif
-
-#if CONFIG_ENABLE_SD_CARD
+#if CONFIG_ENABLE_SD_SPI
     // TODO: maybe this function is not declared anywhere, so we should implement it.
-    err = sys_sd_card_init(SD_CLK, SD_CMD, SD_D0);
+    err = sys_hardware_sd_init(SD_PORT);
     sys->health |= (err == ESP_OK) << SD_HEALTH;
 #endif
 
@@ -420,6 +489,10 @@ void sys_manager(void *args) {
             if (MODE_ARMED == sys->context.mode) {
                 sys->context.mode = MODE_BOOST;
             }
+        }
+        if (active_events & TERMINATE_LOG) {
+            fclose(sys->open_log_file);
+            sys_fs_unmount(sys->card);
         }
         /* if (active_events & ANOTHER_EVENT ) */
     }
@@ -455,7 +528,7 @@ void sysP2I_POST(System *sys){
 #if CONFIG_ENABLE_INA219
         if (ESP_OK == ina219_init(sys->port.bme_ina)) {
             sys->health |= (1 << INA219_HEALTH);
-            ina219_start_task(sys); // Pin to core 1
+            ina219_start_task(sys);
         }
 #endif
     }
@@ -464,16 +537,20 @@ void sysP2I_POST(System *sys){
     if (sys->health & (1 << GPS_UART_HEALTH)) {
         if (ESP_OK == gps_init(GPS_UART)) {
             sys->health |= (1 << GPS_HEALTH);
-            gps_start_task(sys); // pin to core 1, APP_CPU
+            gps_start_task(sys);
         }
     }
 #endif
 
-#if CONFIG_ENABLE_SD_CARD
+#if CONFIG_ENABLE_SD_SPI
     if (sys->health & (1 << SD_HEALTH)) {
-        // TODO:    frame_logger_init, might need a different name, and it would 
-        //          only initiate the file itself where the thing will be stored.
-        if (ESP_OK == frame_logger_init()) sys->health |= (1 << FILESYSTEM_HEALTH);
+        if (ESP_OK == sys_fs_mount(SD_PORT, sys->card)) {
+            sys->health |= (1 << FILESYSTEM_HEALTH);
+            if (ESP_OK == logging_init(&sys->open_log_file, FLIGHT_LOG_FILE_PATH)) {
+                sys->health |= (1 << LOG_FILE_HEALTH);
+                logging_start_task(sys);
+            }
+        }
     }
 #endif
     /* Go/No-Go */
@@ -504,8 +581,6 @@ void app_main(void)
     // TODO: IDLE/ARMED:
     //      - Health monitoring, sending small packets through LoRA every 30 seconds or so
     //      - A failure here triggers a WARM start: 
-    //        * sys_init and sys_POST are performed
-    //        * SENSOR-CHECK is skipped because it requires a manual thing.
     //      - (opt.) Remote Sensor banning, since we can visually see if the sensor is failing.
     //               This will require parsing data from LoRA (advanced).
     // TODO: BOOST:

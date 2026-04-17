@@ -18,6 +18,8 @@
 #include "driver/sdmmc_host.h"
 #endif
 
+#include "systemp2i.h"
+
 static const char *TAG = "frame_logger";
 
 #if CONFIG_ENABLE_SD_CARD
@@ -305,20 +307,23 @@ FILE *frame_logger_get_file(void)
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #define SECTOR_SIZE 4096    // 8 blocks of SD card (512 bytes each).
+                            
 struct LoggerBuffer {
+    portMUX_TYPE guard;     // Legacy
+    SemaphoreHandle_t ready;
+    SemaphoreHandle_t lock;
     volatile uint8_t bufA[SECTOR_SIZE];
     volatile uint8_t bufB[SECTOR_SIZE];
     volatile uint8_t *active_fill_buffer;
     volatile uint8_t *active_save_buffer;
     volatile uint32_t fill_index;
-    portMUX_TYPE guard;
-    SemaphoreHandle_t ready;
 };
 
 LoggerBuffer *logger_buff_init(void) {
     static LoggerBuffer buf;
-    portMUX_INITIALIZE(&buf.guard);
+    portMUX_INITIALIZE(&buf.guard); // TODO: Remove
     buf.ready = xSemaphoreCreateBinary();
+    buf.lock = xSemaphoreCreateMutex();
     buf.active_fill_buffer = buf.bufA;
     buf.active_save_buffer = NULL;
     buf.fill_index = 0;
@@ -326,37 +331,107 @@ LoggerBuffer *logger_buff_init(void) {
 }
 
 
-void write_to_ring_buffer(uint8_t packet, void *data, uint16_t payload_size) {
-    /*
+void 
+write_to_ring_buffer(
+    struct LoggerBuffer *buf,
+    uint8_t type,
+    void *payload, 
+    uint16_t payload_size
+) 
+{
     uint16_t total_sz = sizeof(frame_header_t) + payload_size;
     uint8_t *my_write_pointer = NULL;
+    uint16_t crc = 0xFFFF;
     frame_header_t header;
+    
+    // This can be Wrapped {
+    header.frame_info = type;
+    header.frame_separator[0] = 0xAA;
+    header.frame_separator[1] = 0xAA;
+    header.frame_separator[2] = 0xAA;
+    header.timestamp_ms = xTaskGetTickCount() * portTICK_PERIOD_MS;
+    crc16_ccitt(&crc, (uint8_t *) &header, sizeof(header));
+    crc16_ccitt(&crc, (uint8_t *) payload, payload_size);
+    // Wrapping ends }
 
-    taskENTER_CRITICAL(&buffer_guard);
+    xSemaphoreTake(buf->lock, portMAX_DELAY);
+    // taskENTER_CRITICAL(&buffer_guard); // Legacy
 
-    if (fill_index + total_sz > SECTOR_SZ) {
+    if (buf->fill_index + total_sz > SECTOR_SIZE) {
         // pad the missing space
-        memset(&active_fill_buffer[fill_index], 0, SECTOR_SZ - fill_index);
+        memset((void *)(buf->active_fill_buffer + buf->fill_index), 
+            0, 
+            SECTOR_SIZE - buf->fill_index
+        );
 
-        active_save_buffer = active_fill_buffer;
-        active_fill_buffer = (active_fill_buffer == buffer_A) \
-            ? buffer_B : buffer_A;
-        fill_index = 0;
+        buf->active_save_buffer = buf->active_fill_buffer;
+        buf->active_fill_buffer = (buf->active_fill_buffer == buf->bufA) \
+                                  ? buf->bufB : buf->bufA;
+        buf->fill_index = 0;
 
         // Wake up the logger
-        xSemaphoreGiveFromISR(buffer_ready_singal, NULL);
+        xSemaphoreGive(buf->ready);
     } 
 
-    my_write_pointer = &active_fill_buffer[fill_index];
-    fill_index += total_sz;
-    taskEXIT_CRITICAL(&buffer_guard);
+    my_write_pointer = (uint8_t *)(buf->active_fill_buffer + buf->fill_index);
+    buf->fill_index += total_sz;
+    xSemaphoreGive(buf->lock);
+    // taskEXIT_CRITICAL(&buffer_guard); // Legacy
 
-    header.type = type;
-    header.timestamp_ms = xTaskGetTickCount * portTICK_PERIOD_MS;
     memcpy(my_write_pointer, &header, sizeof(header));
-    memcpy(my_write_pointer + sizeof(header), payload, payload_size);
-    */
+    my_write_pointer += sizeof(header);
+    memcpy(my_write_pointer, payload, payload_size);
+}
 
+esp_err_t logging_init(FILE **file, char *filename) {
+    // This is necessary, so checking the file existence is checked from the very begging
+    *file = fopen(filename, "ab");
+    if (NULL == *file) {
+        return ESP_FAIL;
+    }
+    return ESP_OK;
+}
+
+/*
+ * This is a high-performance task. Missing samples is FORBIDDEN!. By implementing
+ * a double buffering mechanism and dumbing whole data into the SD card, the
+ * required reliability is met.
+ */
+void logging_task(void *args) {
+    struct TaskParams *tparams = (struct TaskParams *) args;
+    struct LoggerBuffer *buf = tparams->log_buffer;
+    FILE **file = (FILE **)tparams->args;
+    uint8_t write_counter = 0;
+
+    if (NULL == *file) {
+        // TODO: trigger health or attempt to open it again.
+        while(1);
+    }
+
+    if (setvbuf(*file, NULL, _IONBF, 0) != 0) {
+        // TODO: trigger health or attempt to open it again.
+        while(1);
+    }
+
+    // TODO: this needs a context as well, so it can shutdown the logging once it landed
+    while(1) {
+        xSemaphoreTake(buf->ready, portMAX_DELAY);
+        if (buf->active_save_buffer != NULL) {
+            // TODO: 1. try to write, but wait for it to be done. and try again if
+            // it fails. Probably writing failures will be linked to SD 
+            // disconnection, so, re-mounting will be required. This is an extreme
+            // hardware requirement.
+            // 2. flash
+            fwrite((void *)buf->active_save_buffer, 1, SECTOR_SIZE, file);
+            write_counter++;
+            // update FAT table every whole double buffer write.
+            if (write_counter & 0x1) {
+                fsync(fileno(*file));
+            }
+        }
+    }
+
+    while(1);
 }
 
 #endif /* CONFIG_ENABLE_SD_CARD */

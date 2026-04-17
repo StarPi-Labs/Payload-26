@@ -40,11 +40,17 @@ menu "Star-PI Payload Configuration"
         help
             GPS receiver connected via UART (e.g. u-blox NEO-6M).
 
-    config ENABLE_SD_CARD
-        bool "Enable SD card logging"
-        default y
+    config ENABLE_SD_SDIO
+        bool "Enable SD card logging through SDIO"
+        default n
         help
             Log all sensor data to a CSV file on the SD card (SDMMC 1-bit).
+
+    config ENABLE_SD_SPI
+        bool "Enable SD card logging through SPI"
+        default y
+        help
+            Log all sensors data to a binary file on the SD card (SD SPI)
 
     comment "──── Sampling ────"
 

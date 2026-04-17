@@ -22,10 +22,10 @@ endif()
 
 # Frame logger is always compiled (frame building types needed)
 # SD card functions are no-ops when SD is disabled
-list(APPEND srcs "frame_logger.c" "health_monitoring.c" "bt_serial_bridge.c")
+list(APPEND srcs "frame_logger.c" "health_monitoring.c" "bt_serial_bridge.c" "sdif.c")
 
 idf_component_register(
     SRCS ${srcs}
     INCLUDE_DIRS "."
-    REQUIRES bt nvs_flash esp_driver_uart esp_driver_i2c esp_driver_gpio
+    REQUIRES bt nvs_flash esp_driver_uart esp_driver_i2c esp_driver_gpio fatfs
 )

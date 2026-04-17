@@ -3,6 +3,9 @@
 
 /* SYSTEM PAYLOAD-PI */
 #include "driver/i2c_master.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
+#include "sdmmc_cmd.h"
 #include "health_monitoring.h"
 #include "frame_logger.h"
 
@@ -10,15 +13,22 @@
 #define I2C1_HEALTH         14
 #define GPS_UART_HEALTH     13
 #define LORA_UART_HEALTH    12
-#define SD_HEALTH           11
 
+#define SD_HEALTH           11
+#define FILESYSTEM_HEALTH   10
+#define SYS_RESERVED0       9
+#define SYS_RESERVED1       8
+// --
 #define MPU6050_HEALTH      7
 #define BME680_HEALTH       6
 #define INA219_HEALTH       5
 #define GPS_HEALTH          4
-#define LORA_HEALTH         3
-#define FILESYSTEM_HEALTH   2
-#define BATTERY_HEALTH      1
+
+#define LOG_FILE_HEALTH     3
+#define BATTERY_HEALTH      2
+#define PER_RESERVED0       1
+#define PER_RESERVED1       0
+//--
 #define SENSORS_HEALTH      ((1 << MPU6050_HEALTH) | (1 << BME680_HEALTH) | (1 << INA219_HEALTH) | (1 << GPS_HEALTH))
 
 typedef struct {
@@ -45,6 +55,7 @@ struct TaskParams {
     HMBuffer          *hm_buffer;
     LoggerBuffer      *log_buffer;
     struct SysContext *context;
+    void              *args;
 };
 
 typedef struct {
@@ -55,6 +66,8 @@ typedef struct {
     LoggerBuffer *log_buffer;
     HMBuffer     *hm_buffer;
     FlightRecord *record;
+    FILE *open_log_file;
+    sdmmc_card_t *card;
 } System;
 
 /* System States */

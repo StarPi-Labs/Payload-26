@@ -37,8 +37,12 @@
 #define BME680_CORE             1
 #define BME680_PRIORITY         4                       // Medium Priority
 #define INA219_PRIORITY         3                       // Lowest Priority
-#define INA219_PERIOD_100ms     100                     // 10Hz
+#define INA219_PERIOD_1ms       1                       // 1000Hz, max: 1.8kHz, period 532us
+#define INA219_PERIOD_2ms       2                       // 500Hz    
+#define INA219_PERIOD_10ms      10                      // 100Hz
+#define INA219_PERIOD_100ms     100                     // 10Hz     (default and recommeded)
 #define INA219_PERIOD_1s        1000                    // 1Hz
+#define INA219_PERIOD_default   INA219_PERIOD_100ms
 #define INA219_HM_SKIP_SAMPLES  10                      // TODO: right now this 
                                                         // can be sampled @ 1.8kHz
                                                         // however, for this application
@@ -64,9 +68,13 @@
 #define HEALTH_MONITOR_BAUD     105200
 
 // SD Card (SDMMC 1-bit mode)
+#define SD_PORT                 SPI2_HOST
 #define PIN_SD_CLK              CONFIG_SD_CLK_PIN
 #define PIN_SD_CMD              CONFIG_SD_CMD_PIN
 #define PIN_SD_D0               CONFIG_SD_D0_PIN
+#define FLIGHT_LOG_FILE_PATH    "/sd/pstarpi.bin"          // Name should be short
+#define LOGGING_PRIORITY        1
+#define LOGGING_CORE            0
 
 /* ──────────────────────────────────────────────────────────
  *  Generic sensor interface
