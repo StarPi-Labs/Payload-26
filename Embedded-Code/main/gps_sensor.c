@@ -225,7 +225,7 @@ void gps_rx_task(void *arg) {
     // - we might need to pass the system health instead, probabily, idk
     //   so we can flag it dead.
     // - fix the waiting time in uart_read_bytes
-    uint8_t byte;
+    uint8_t bytes[128];
     uint8_t attempts = 0;
     uint8_t telemetry_counter = 0;
     struct GPSInfo gps_info = {0};
@@ -235,7 +235,7 @@ void gps_rx_task(void *arg) {
     ESP_LOGI(TAG, "GPS RX task running");
 
     while (1) {
-        int len = uart_read_bytes(GPS_UART, &byte, 1, pdMS_TO_TICKS(100));  // I think 1 second waiting would be enough
+        int len = uart_read_bytes(GPS_UART, &bytes, 128, pdMS_TO_TICKS(10));  // I think 1 second waiting would be enough
                                                                             // because we are reading this at 1Hz as well
         if (len < 0) {
             attempts++;
@@ -248,8 +248,10 @@ void gps_rx_task(void *arg) {
         }
 
         attempts = 0;
-
-        parse_nmea(&gps_info, byte);
+        
+        for (int i = 0; i < len; i++) {
+            parse_nmea(&gps_info, bytes[i]);
+        }
 
         if (gps_info.available == NMEA_READY_INFO) {
             /* TODO: After parsed, this task should sleep for a second. */

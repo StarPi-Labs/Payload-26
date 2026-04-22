@@ -73,7 +73,7 @@ hm_send(
     buf->head = buf->head + payload_size;
 
     // Moving CRC-16
-    memcpy(buf->data + buf->head + payload_size, &crc, 2);
+    memcpy(buf->data + buf->head, &crc, 2);
     buf->head = (buf->head + 2) % HM_BUFFER_SZ;
 
     //taskEXIT_CRITICAL(&buf->guard);
