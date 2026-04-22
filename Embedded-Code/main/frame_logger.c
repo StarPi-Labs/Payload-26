@@ -10,6 +10,7 @@
 
 #include <string.h>
 #include <stdio.h>
+#include <unistd.h>
 
 #if CONFIG_ENABLE_SD_CARD
 #include <sys/stat.h>
@@ -256,7 +257,7 @@ void frame_logger_deinit(void)
         ESP_LOGI(TAG, "Wrote %lu frames total", (unsigned long)s_frame_count);
     }
     if (s_card) {
-        esp_vfs_fat_sdcard_unmount(MOUNT_POINT, s_card);
+        // esp_vfs_fat_sdcard_unmount(MOUNT_POINT, s_card);
         s_card = NULL;
     }
     ESP_LOGI(TAG, "SD card unmounted");
@@ -422,7 +423,7 @@ void logging_task(void *args) {
             // disconnection, so, re-mounting will be required. This is an extreme
             // hardware requirement.
             // 2. flash
-            fwrite((void *)buf->active_save_buffer, 1, SECTOR_SIZE, file);
+            fwrite((void *)buf->active_save_buffer, 1, SECTOR_SIZE, *file);
             write_counter++;
             // update FAT table every whole double buffer write.
             if (write_counter & 0x1) {

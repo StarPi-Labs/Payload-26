@@ -307,66 +307,143 @@ void ina219_start_task(System *sys) {
 }
 
 #include "esp_timer.h" // For microsecond-accurate timing
-
+#include <fcntl.h>
+#include <unistd.h>
+#include "esp_heap_caps.h"
 void sd_benchmark_task(void *pvParameters) {
-    ESP_LOGI("BENCHMARK", "Starting SD Card Write Speed Test...");
+    ESP_LOGI("BENCHMARK", "Starting POSIX SD Card Write Speed Test...");
 
-    // 1. Create a 4KB dummy buffer and fill it with test data (0xAA)
     const size_t buffer_size = 4096;
-    uint8_t *dummy_buffer = malloc(buffer_size);
+    uint8_t *dummy_buffer = heap_caps_malloc(buffer_size, MALLOC_CAP_DMA);
+    if (dummy_buffer == NULL) {
+        ESP_LOGE("BENCHMARK", "Failed to allocate buffer!");
+        vTaskDelete(NULL);
+        return;
+    }
     memset(dummy_buffer, 0xAA, buffer_size);
 
-    // 2. Open the file and disable C-buffering (like we discussed)
-    FILE *f = fopen("/sdcard/bench.bin", "w");
-    if (f == NULL) {
+    int fd = open("/sd/bench.bin", O_WRONLY | O_CREAT | O_TRUNC, 0666);
+    
+    if (fd < 0) { // POSIX returns -1 on error, not NULL
         ESP_LOGE("BENCHMARK", "Failed to open file!");
         free(dummy_buffer);
         vTaskDelete(NULL);
         return;
     }
-    setvbuf(f, NULL, _IONBF, 0);
 
-    // 3. Set up the test parameters
-    const int iterations = 1000; // 1000 writes * 4KB = ~4 Megabytes
+    const int iterations = 1000;
     int successful_writes = 0;
 
     ESP_LOGI("BENCHMARK", "Writing %d MB of data...", (iterations * buffer_size) / (1024 * 1024));
 
-    // --- START THE STOPWATCH ---
     int64_t start_time_us = esp_timer_get_time();
 
     for (int i = 0; i < iterations; i++) {
-        size_t written = fwrite(dummy_buffer, 1, buffer_size, f);
+        int64_t t1 = esp_timer_get_time();
+        ssize_t written = write(fd, dummy_buffer, buffer_size);
+        int64_t t2 = esp_timer_get_time();
+        fsync(fd);
+        int64_t t3 = esp_timer_get_time();
+        printf("Write took: %lld us | fsync took: %lld us\n", (t2 - t1), (t3 - t2));
+        
         if (written == buffer_size) {
             successful_writes++;
+        } else {
+            ESP_LOGE("BENCHMARK", "Write failed at iteration %d! Error code: %d", i, written);
+            break; // Stop if the hardware fails
         }
     }
 
-    // --- STOP THE STOPWATCH ---
     int64_t end_time_us = esp_timer_get_time();
 
-    // 4. Safely close the file and free RAM
-    fclose(f);
+    // 3. Use POSIX close()
+    close(fd);
     free(dummy_buffer);
 
-    // 5. Calculate the results
     int64_t time_taken_us = end_time_us - start_time_us;
     float time_taken_sec = (float)time_taken_us / 1000000.0f;
-
     uint32_t total_bytes_written = successful_writes * buffer_size;
-    float kilobytes_written = (float)total_bytes_written / 1024.0f;
+    float speed_kbs = (total_bytes_written / 1024.0f) / time_taken_sec;
 
-    float speed_kbs = kilobytes_written / time_taken_sec;
-
-    // 6. Print the glorious results
     ESP_LOGI("BENCHMARK", "=== RESULTS ===");
-    ESP_LOGI("BENCHMARK", "Total Time: %.2f seconds", time_taken_sec);
-    ESP_LOGI("BENCHMARK", "Data Written: %.2f KB", kilobytes_written);
-    ESP_LOGI("BENCHMARK", "Average Speed: %.2f KB/s", speed_kbs);
+    ESP_LOGI("BENCHMARK", "Speed: %.2f KB/s", speed_kbs);
     ESP_LOGI("BENCHMARK", "===============");
 
     vTaskDelete(NULL);
 }
+
+/*
+#include <fcntl.h>
+#include <unistd.h>
+#include "ff.h"
+#include "esp_vfs_fat.h"
+// 1. Allocate globally so it never touches the heap
+static uint8_t static_dummy_buffer[512];
+
+void sd_benchmark_task(void *pvParameters) {
+    ESP_LOGI("BENCHMARK", "Starting Static Memory Test...");
+
+    memset(static_dummy_buffer, 0xAA, sizeof(static_dummy_buffer));
+
+    int fd = open("/sd/bench.bin", O_WRONLY | O_CREAT | O_TRUNC, 0666);
+    if (fd < 0) {
+        ESP_LOGE("BENCHMARK", "failed to open file.");
+        vTaskDelete(NULL);
+        return;
+    }
+
+
+// 2. Pre-allocate 1000 sectors (512 KB)
+// We jump to the end, write one byte, and then come back.
+// This forces FatFs to find and link all the clusters in between.
+if (lseek(fd, (1000 * 512) - 1, SEEK_SET) != -1) {
+    write(fd, "\0", 1); 
+    fsync(fd); // Force the FAT table to write the changes to the SD card NOW
+    lseek(fd, 0, SEEK_SET); // Go back to the start for your benchmark
+    printf("Pre-allocation (512KB) finished.\n");
+}
+
+    for (int i = 0; i < 1000; i++) {
+
+        ssize_t written = write(fd, static_dummy_buffer, 512);
+    
+        if (written == 512) {
+            ESP_LOGI("BENCHMARK", "Write %d successful", i);
+        } else {
+            break;
+        }
+
+    }
+
+    close(fd);
+    vTaskDelete(NULL);
+}
+
+#include "sdmmc_cmd.h"
+void sd_safe_read_test(void *pvParameters) {
+    ESP_LOGI("SAFE_TEST", "Starting Safe Raw Read Test...");
+    struct TaskParams *tparams = (struct TaskParams*)pvParameters;
+    sdmmc_card_t *card = (sdmmc_card_t *)tparams->args;
+
+    // Static buffer to avoid heap issues
+    static uint8_t raw_buffer[512];
+
+    // READ Sector 0 exactly 1000 times. Completely non-destructive.
+    for (int i = 0; i < 1000; i++) {
+        esp_err_t err = sdmmc_read_sectors(card, raw_buffer, 0, 1);
+
+        if (err == ESP_OK) {
+            if (i % 100 == 0) ESP_LOGI("SAFE_TEST", "Read %d successful", i);
+        } else {
+            ESP_LOGE("SAFE_TEST", "Read %d failed: %s", i, esp_err_to_name(err));
+            break;
+        }
+    }
+
+    ESP_LOGI("SAFE_TEST", "Safe Test Complete.");
+    vTaskDelete(NULL);
+}
+*/
 
 void logging_start_task(System *sys) {
     // TODO:
@@ -380,13 +457,38 @@ void logging_start_task(System *sys) {
     params.hm_buffer = NULL;
     params.log_buffer = sys->log_buffer;
     params.context = NULL;
-    params.args = (void *)&sys->open_log_file;
+    //params.args = (void *)&sys->open_log_file;
+    params.args = (void *)sys->card;
     
     /*
-    fprintf(sys->open_log_file, "Temperature: 24.5C, humidity: 50");
+    setvbuf(sys->open_log_file, NULL, _IONBF, 0);
+    fprintf(sys->open_log_file, "Test IONBF");
+
+    const size_t buffer_size = 512;
+    uint8_t *dummy_buffer = malloc(buffer_size);
+    if (dummy_buffer == NULL) {
+        ESP_LOGE("BENCHMARK", "Failed to allocate buffer!");
+        vTaskDelete(NULL);
+        return;
+    }
+    memset(dummy_buffer, 0xAA, buffer_size);
+
+    */
     fclose(sys->open_log_file);
+    /*
     sys_fs_unmount(sys->card);
     */
+    
+    
+    xTaskCreatePinnedToCore(
+        sd_benchmark_task,
+        "sd_benchmark_task",
+        16384,
+        (void *)&params,
+        LOGGING_PRIORITY,
+        &logging_handle,
+        LOGGING_CORE
+    );
 
     /*
     xTaskCreatePinnedToCore(
@@ -485,12 +587,13 @@ void sys_manager(void *args) {
         taskEXIT_CRITICAL(&sys->context.events_guard);
 
         /* Process Event */
-        if (active_events & SHOCK_3G_DETECTED) {
+        if (active_events & EVT_SHOCK_3G_DETECTED) {
             if (MODE_ARMED == sys->context.mode) {
                 sys->context.mode = MODE_BOOST;
             }
         }
-        if (active_events & TERMINATE_LOG) {
+        if (active_events & EVT_TERMINATE_LOG) {
+            ESP_LOGI("MAIN", "Umount fs.");
             fclose(sys->open_log_file);
             sys_fs_unmount(sys->card);
         }
@@ -537,14 +640,14 @@ void sysP2I_POST(System *sys){
     if (sys->health & (1 << GPS_UART_HEALTH)) {
         if (ESP_OK == gps_init(GPS_UART)) {
             sys->health |= (1 << GPS_HEALTH);
-            gps_start_task(sys);
+            // gps_start_task(sys);
         }
     }
 #endif
 
 #if CONFIG_ENABLE_SD_SPI
     if (sys->health & (1 << SD_HEALTH)) {
-        if (ESP_OK == sys_fs_mount(SD_PORT, sys->card)) {
+        if (ESP_OK == sys_fs_mount(SD_PORT, &sys->card)) {
             sys->health |= (1 << FILESYSTEM_HEALTH);
             if (ESP_OK == logging_init(&sys->open_log_file, FLIGHT_LOG_FILE_PATH)) {
                 sys->health |= (1 << LOG_FILE_HEALTH);
@@ -597,30 +700,6 @@ void app_main(void)
     if ((sys.health & SENSORS_HEALTH) == 0) {
         ESP_LOGW(TAG, "No sensors enabled! Enable at least one via menuconfig. System Health 0x%04X.", sys.health);
     }
-
-    /* ── 3. SD card (binary frame logger) ────────────────── */
-#if CONFIG_ENABLE_SD_CARD
-    esp_err_t sd_ret = frame_logger_init();
-    if (sd_ret != ESP_OK) {
-        ESP_LOGE(TAG, "SD card init failed — data will NOT be logged!");
-    }
-#endif
-
-    /* ── 4. Ring buffer ──────────────────────────────────── */
-    ring_buffer_init();
-
-    /* ── 5. Start tasks on separate cores ────────────────── */
-    static TaskHandle_t sensor_task_h = NULL;
-    xTaskCreatePinnedToCore(task_sensor_read, "sensor_rd", 4096, (void *)&sys, 6, &sensor_task_h, 1);
-
-#if CONFIG_ENABLE_SD_CARD
-    if (sd_ret == ESP_OK) {
-        static TaskHandle_t sd_task_h = NULL;
-        xTaskCreatePinnedToCore(task_sd_write, "sd_wr", 8192, NULL, 5, &sd_task_h, 0);
-    }
-#endif
-
-    ESP_LOGI(TAG, "System running — sampling every %d ms", CONFIG_SAMPLE_INTERVAL_MS);
 
     /* ── 6. Heartbeat / watchdog loop ────────────────────── */
     while (1) {
