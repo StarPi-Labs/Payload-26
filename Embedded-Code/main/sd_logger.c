@@ -90,7 +90,7 @@ void sd_logger_deinit(void)
         s_file = NULL;
     }
     if (s_card) {
-        esp_vfs_fat_sdcard_unmount(MOUNT_POINT, s_card);
+        // esp_vfs_fat_sdcard_unmount(MOUNT_POINT, s_card);
         s_card = NULL;
     }
     ESP_LOGI(TAG, "SD card unmounted");

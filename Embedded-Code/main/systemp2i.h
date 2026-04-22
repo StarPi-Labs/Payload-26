@@ -78,6 +78,7 @@ enum {
 };
 
 /* System Events */
-#define SHOCK_3G_DETECTED   (1 << 0)
+#define EVT_SHOCK_3G_DETECTED   (1 << 0)
+#define EVT_TERMINATE_LOG       (1 << 1)
 
 #endif
