@@ -12,7 +12,7 @@ DATA_DIR = os.path.join(BASE_DIR, 'data')
 ALLOWED_VIDEO_EXTENSIONS = {'mp4', 'avi', 'mov', 'mkv'}
 ALLOWED_DATA_EXTENSIONS = {'txt', 'csv', 'log'}
 
-app = Flask(__name__, static_folder='../Frontend/Figma/dist')
+app = Flask(__name__, static_folder='../Frontend/dist')
 CORS(app)
 
 # Ensure data directory exists
@@ -26,30 +26,6 @@ os.makedirs(DATA_DIR, exist_ok=True)
 def allowed_file(filename, allowed_extensions):
     """Check if file has an allowed extension"""
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in allowed_extensions
-
-
-def get_or_create_flight_folder(date_str=None):
-    """
-    Get or create a flight folder with format YYYY-MM-DD
-    If no date provided, uses today's date
-    """
-    if date_str is None:
-        date_str = datetime.now().strftime('%Y-%m-%d')
-    
-    # Validate date format
-    try:
-        datetime.strptime(date_str, '%Y-%m-%d')
-    except ValueError:
-        raise ValueError(f"Invalid date format: {date_str}. Use YYYY-MM-DD")
-    
-    folder_path = os.path.join(DATA_DIR, date_str)
-    os.makedirs(folder_path, exist_ok=True)
-    
-    # Create subfolders for organization
-    os.makedirs(os.path.join(folder_path, 'videos'), exist_ok=True)
-    os.makedirs(os.path.join(folder_path, 'telemetry'), exist_ok=True)
-    
-    return folder_path
 
 
 def parse_sensor_data(file_path):
@@ -204,23 +180,6 @@ def get_flights():
     return jsonify({'flights': flights})
 
 
-@app.route('/api/flights', methods=['POST'])
-def create_flight():
-    """Create a new flight folder for a specific date"""
-    data = request.get_json() or {}
-    date_str = data.get('date', datetime.now().strftime('%Y-%m-%d'))
-    
-    try:
-        folder_path = get_or_create_flight_folder(date_str)
-        return jsonify({
-            'success': True,
-            'message': f'Flight folder created for {date_str}',
-            'flight': get_flight_info(folder_path)
-        }), 201
-    except ValueError as e:
-        return jsonify({'success': False, 'error': str(e)}), 400
-
-
 @app.route('/api/flights/<flight_id>', methods=['GET'])
 def get_flight(flight_id):
     """Get details for a specific flight"""
@@ -232,59 +191,9 @@ def get_flight(flight_id):
     return jsonify(get_flight_info(folder_path))
 
 
-@app.route('/api/flights/<flight_id>', methods=['DELETE'])
-def delete_flight(flight_id):
-    """Delete a flight and all its data"""
-    import shutil
-    folder_path = os.path.join(DATA_DIR, flight_id)
-    
-    if not os.path.exists(folder_path):
-        return jsonify({'error': 'Flight not found'}), 404
-    
-    try:
-        shutil.rmtree(folder_path)
-        return jsonify({'success': True, 'message': f'Flight {flight_id} deleted'})
-    except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
-
-
 # ============================================================================
-# VIDEO UPLOAD & SERVING API
+# VIDEO SERVING API
 # ============================================================================
-
-@app.route('/api/flights/<flight_id>/videos', methods=['POST'])
-def upload_video(flight_id):
-    """Upload video file(s) to a flight"""
-    folder_path = os.path.join(DATA_DIR, flight_id)
-    
-    if not os.path.exists(folder_path):
-        # Create folder if it doesn't exist
-        try:
-            folder_path = get_or_create_flight_folder(flight_id)
-        except ValueError:
-            return jsonify({'error': 'Invalid flight ID format'}), 400
-    
-    if 'video' not in request.files:
-        return jsonify({'error': 'No video file provided'}), 400
-    
-    files = request.files.getlist('video')
-    uploaded = []
-    errors = []
-    
-    for file in files:
-        if file and allowed_file(file.filename, ALLOWED_VIDEO_EXTENSIONS):
-            filename = secure_filename(file.filename)
-            video_path = os.path.join(folder_path, 'videos', filename)
-            file.save(video_path)
-            uploaded.append(filename)
-        else:
-            errors.append(f"Invalid file: {file.filename}")
-    
-    return jsonify({
-        'success': True,
-        'uploaded': uploaded,
-        'errors': errors
-    }), 201 if uploaded else 400
 
 
 @app.route('/api/flights/<flight_id>/videos', methods=['GET'])
@@ -314,40 +223,6 @@ def serve_video(flight_id, filename):
 # ============================================================================
 # TELEMETRY DATA API
 # ============================================================================
-
-@app.route('/api/flights/<flight_id>/telemetry', methods=['POST'])
-def upload_telemetry(flight_id):
-    """Upload sensor data file(s) to a flight"""
-    folder_path = os.path.join(DATA_DIR, flight_id)
-    
-    if not os.path.exists(folder_path):
-        try:
-            folder_path = get_or_create_flight_folder(flight_id)
-        except ValueError:
-            return jsonify({'error': 'Invalid flight ID format'}), 400
-    
-    if 'telemetry' not in request.files:
-        return jsonify({'error': 'No telemetry file provided'}), 400
-    
-    files = request.files.getlist('telemetry')
-    uploaded = []
-    errors = []
-    
-    for file in files:
-        if file and allowed_file(file.filename, ALLOWED_DATA_EXTENSIONS):
-            filename = secure_filename(file.filename)
-            telemetry_path = os.path.join(folder_path, 'telemetry', filename)
-            file.save(telemetry_path)
-            uploaded.append(filename)
-        else:
-            errors.append(f"Invalid file: {file.filename}")
-    
-    return jsonify({
-        'success': True,
-        'uploaded': uploaded,
-        'errors': errors
-    }), 201 if uploaded else 400
-
 
 @app.route('/api/flights/<flight_id>/telemetry', methods=['GET'])
 def get_telemetry(flight_id):
@@ -394,68 +269,6 @@ def get_raw_telemetry(flight_id):
             })
     
     return jsonify({'files': files_data})
-
-
-# ============================================================================
-# BULK IMPORT FROM SD CARD
-# ============================================================================
-
-@app.route('/api/import', methods=['POST'])
-def import_from_path():
-    """
-    Import files from a local path (e.g., mounted SD card)
-    Expects JSON: { "source_path": "/media/sdcard", "date": "2024-03-15" }
-    """
-    data = request.get_json()
-    
-    if not data or 'source_path' not in data:
-        return jsonify({'error': 'source_path is required'}), 400
-    
-    source_path = data['source_path']
-    date_str = data.get('date', datetime.now().strftime('%Y-%m-%d'))
-    
-    if not os.path.exists(source_path):
-        return jsonify({'error': f'Source path does not exist: {source_path}'}), 400
-    
-    try:
-        flight_folder = get_or_create_flight_folder(date_str)
-    except ValueError as e:
-        return jsonify({'error': str(e)}), 400
-    
-    import shutil
-    imported_videos = []
-    imported_telemetry = []
-    errors = []
-    
-    # Walk through source directory
-    for root, dirs, files in os.walk(source_path):
-        for filename in files:
-            src_file = os.path.join(root, filename)
-            
-            if allowed_file(filename, ALLOWED_VIDEO_EXTENSIONS):
-                dst_file = os.path.join(flight_folder, 'videos', secure_filename(filename))
-                try:
-                    shutil.copy2(src_file, dst_file)
-                    imported_videos.append(filename)
-                except Exception as e:
-                    errors.append(f"Failed to copy {filename}: {str(e)}")
-            
-            elif allowed_file(filename, ALLOWED_DATA_EXTENSIONS):
-                dst_file = os.path.join(flight_folder, 'telemetry', secure_filename(filename))
-                try:
-                    shutil.copy2(src_file, dst_file)
-                    imported_telemetry.append(filename)
-                except Exception as e:
-                    errors.append(f"Failed to copy {filename}: {str(e)}")
-    
-    return jsonify({
-        'success': True,
-        'flight_id': date_str,
-        'imported_videos': imported_videos,
-        'imported_telemetry': imported_telemetry,
-        'errors': errors
-    })
-
 
 # ============================================================================
 # HEALTH CHECK
