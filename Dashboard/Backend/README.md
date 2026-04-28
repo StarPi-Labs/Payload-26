@@ -17,12 +17,14 @@ pip install -r requirements.txt
 
 3. Build the frontend first:
 ```bash
-cd ../Frontend/
+cd ../Frontend
 npm run build
 cd ../Backend
 ```
 
-4. Run the server:
+4. Upload the Frontend to the Hoster
+
+5. Run the backend server:
 ```bash
 python server.py
 ```
