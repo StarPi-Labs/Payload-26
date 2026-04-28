@@ -17,9 +17,9 @@ pip install -r requirements.txt
 
 3. Build the frontend first:
 ```bash
-cd ../Frontend/Figma
+cd ../Frontend/
 npm run build
-cd ../../Backend
+cd ../Backend
 ```
 
 4. Run the server:
