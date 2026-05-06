@@ -6,6 +6,8 @@ import { VideoSource } from "../models/videp-source";
 const VideoTag: Component<{
     source: VideoSource;
     muted: boolean;
+    autoplay: boolean;
+    loop: boolean;
     objectFit: "cover" | "contain" | "fill";
     class: string;
     startAt?: number | null;
@@ -52,10 +54,10 @@ const VideoTag: Component<{
             <video
                 ref={videoRef}
                 src={props.source.src}
-                autoplay
+                autoplay={props.autoplay}
                 controls={false}
                 muted={props.muted}
-                loop
+                loop={props.loop}
                 playsinline
                 class={props.class}
                 style={{ "object-fit": props.objectFit }}
@@ -104,6 +106,8 @@ const VideoPlayer: Component<MultiVideoPlayerProps> = (rawProps) => {
                     <VideoTag
                         source={activeSource()!}
                         muted={props.muted}
+                        autoplay={props.autoplay}
+                        loop={props.loop}
                         objectFit={props.objectFit}
                         class="w-full h-full"
                         startAt={syncTime()}
@@ -137,6 +141,8 @@ const VideoPlayer: Component<MultiVideoPlayerProps> = (rawProps) => {
                                 <VideoTag
                                     source={source}
                                     muted={true}
+                                    autoplay={props.autoplay}
+                                    loop={props.loop}
                                     objectFit="cover"
                                     class="w-full h-full pointer-events-none"
                                 />

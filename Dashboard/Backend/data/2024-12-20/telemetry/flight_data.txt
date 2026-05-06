@@ -1,3 +1,5 @@
+# targetAltitude=750
+# t0=2024-12-20T10:30:00Z
 time,altitude,velocity,horizontalVelocity,acceleration,accelerationX,accelerationY,accelerationZ,temperature,pressure,humidity,gpsLat,gpsLon,pitch,roll,yaw
 0.0,0,0,0,0,0,0,0,22.5,101.3,45,37.7749,-122.4194,0,0,0
 0.1,2,8,1,15.2,14.8,1.5,1.0,22.5,101.3,45,37.7749,-122.4194,1,0.5,2
