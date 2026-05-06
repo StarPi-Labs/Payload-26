@@ -6,10 +6,6 @@
  * Enable / disable peripherals via  `idf.py menuconfig`
  *   → "Star-PI Payload Configuration"
  *
- * Architecture:
- *   Core 1  →  task_sensor_read()   reads all enabled sensors into a ring buffer
- *   Core 0  →  task_sd_write()      drains the ring buffer to the SD card CSV
- *
  * To add a new sensor:
  *   1.  Create  my_sensor.h / my_sensor.c  exporting a `sensor_driver_t`
  *   2.  Add a Kconfig bool  CONFIG_ENABLE_MY_SENSOR
@@ -64,182 +60,8 @@ static const char *TAG = "main";
 /* Global Variables */
 RTC_DATA_ATTR FlightRecord global_flight_record;
 
-/* ═══════════════════════════════════════════════════════════
- *  Lock-free ring buffer  (single producer / single consumer)
- * ═══════════════════════════════════════════════════════════ */
-
-#define BUFFER_SIZE     4096
-#define SAMPLE_SIZE     256     /* generous upper bound per combined sample */
-
-typedef struct {
-    uint8_t           data[BUFFER_SIZE];
-    atomic_size_t     write_index;
-    atomic_size_t     read_index;
-    SemaphoreHandle_t data_available;
-} RingBuffer_t;
-
-static RingBuffer_t ring_buffer;
-
-static void ring_buffer_init(void)
-{
-    memset(ring_buffer.data, 0, BUFFER_SIZE);
-    atomic_store(&ring_buffer.write_index, 0);
-    atomic_store(&ring_buffer.read_index, 0);
-    ring_buffer.data_available = xSemaphoreCreateCounting(BUFFER_SIZE / SAMPLE_SIZE, 0);
-    ESP_LOGI(TAG, "Ring buffer ready (%d bytes)", BUFFER_SIZE);
-}
-
-static inline size_t ring_buffer_free(void)
-{
-    return BUFFER_SIZE - (atomic_load(&ring_buffer.write_index) -
-                          atomic_load(&ring_buffer.read_index));
-}
-
-static inline size_t ring_buffer_available(void)
-{
-    return atomic_load(&ring_buffer.write_index) -
-           atomic_load(&ring_buffer.read_index);
-}
-
-static size_t ring_buffer_write(const uint8_t *src, size_t len)
-{
-    if (ring_buffer_free() < len) {
-        // ESP_LOGW(TAG, "Ring buffer full — dropping %d bytes", (int)len);
-        return 0;
-    }
-    size_t w = atomic_load(&ring_buffer.write_index);
-    for (size_t i = 0; i < len; i++)
-        ring_buffer.data[(w + i) % BUFFER_SIZE] = src[i];
-    atomic_store(&ring_buffer.write_index, w + len);
-    xSemaphoreGive(ring_buffer.data_available);
-    return len;
-}
-
-static size_t ring_buffer_read(uint8_t *dst, size_t max_len)
-{
-    size_t avail = ring_buffer_available();
-    if (avail == 0) return 0;
-    size_t n = (max_len < avail) ? max_len : avail;
-    size_t r = atomic_load(&ring_buffer.read_index);
-    for (size_t i = 0; i < n; i++)
-        dst[i] = ring_buffer.data[(r + i) % BUFFER_SIZE];
-    atomic_store(&ring_buffer.read_index, r + n);
-    return n;
-}
-
-/* ═══════════════════════════════════════════════════════════
- *  Core 1 — sensor read task (builds binary frames)
- * ═══════════════════════════════════════════════════════════ */
-
-static void task_sensor_read(void *arg)
-{
-    System *sys = (System *) arg;
-    ESP_LOGI(TAG, "Sensor task running on core %d", xPortGetCoreID());
-
-    uint16_t frame_id = 0;
-    frame_builder_t fb;
-
-    while (1) {
-        /* Start new frame */
-        frame_begin(&fb, frame_id);
-
-        /* Timestamp (ms) */
-        uint32_t ts = xTaskGetTickCount() * portTICK_PERIOD_MS;
-        frame_add_timestamp(&fb, ts);
-
-        /* MPU6050: Accelerometer + Gyroscope + Temperature */
-#if CONFIG_ENABLE_MPU6050
-        if (sys->health & (1 << MPU6050_HEALTH)) {
-            uint8_t mpu_data[14];
-            esp_err_t ret = mpu6050_read(mpu_data);
-            if (ret == ESP_OK) {
-                /* Accel: bytes 0-5 (X, Y, Z as int16 big-endian) */
-                frame_add_accel(&fb, mpu_data);
-                
-                /* Gyro: bytes 8-13 (X, Y, Z as int16 big-endian) */
-                frame_add_gyro(&fb, mpu_data + 8);
-                
-                /* Temp from MPU: bytes 6-7, expand to 4 bytes */
-                uint8_t temp_data[4] = {mpu_data[6], mpu_data[7], 0, 0};
-                frame_add_temperature(&fb, temp_data);
-            } else {
-                ESP_LOGW(TAG, "MPU6050 read failed: %s", esp_err_to_name(ret));
-            }
-        }
-#endif
-
-        /* BME280: Pressure + Temperature + Humidity */
-#if CONFIG_ENABLE_BME680
-        if (sys->health & (1 << BME680_HEALTH)) {
-            uint8_t bme_data[8];
-            esp_err_t ret = bme280_read(bme_data);
-            if (ret == ESP_OK) {
-                /* Pressure: bytes 0-2 (20-bit), expand to 4 bytes */
-                uint8_t press_data[4] = {bme_data[0], bme_data[1], bme_data[2], 0};
-                frame_add_pressure(&fb, press_data);
-                
-                /* Humidity: bytes 6-7 */
-                frame_add_humidity(&fb, bme_data + 6);
-                
-                /* If MPU6050 not present, use BME280 temperature */
-#if !CONFIG_ENABLE_MPU6050
-                uint8_t temp_data[4] = {bme_data[3], bme_data[4], bme_data[5], 0};
-                frame_add_temperature(&fb, temp_data);
-#endif
-            } else {
-                ESP_LOGW(TAG, "BME280 read failed: %s", esp_err_to_name(ret));
-            }
-        }
-#endif
-
-        /* Finalize frame (adds CRC) */
-        size_t frame_len = frame_finish(&fb);
-
-        /* Write frame to ring buffer */
-        if (ring_buffer_write(frame_get_data(&fb), frame_len) > 0) {
-            frame_id++;
-            if (frame_id % 500 == 0) {
-                ESP_LOGI(TAG, "Frames: %u", frame_id);
-            }
-        }
-
-        vTaskDelay(pdMS_TO_TICKS(CONFIG_SAMPLE_INTERVAL_MS));
-    }
-}
-
-/* ═══════════════════════════════════════════════════════════
- *  Core 0 — SD card write task (writes binary frames)
- * ═══════════════════════════════════════════════════════════ */
-
 #if CONFIG_ENABLE_SD_CARD
-static void task_sd_write(void *arg)
-{
-    ESP_LOGI(TAG, "SD write task running on core %d", xPortGetCoreID());
-
-    uint8_t buf[FRAME_MAX_SIZE];
-    uint32_t frames_written = 0;
-
-    while (1) {
-        if (xSemaphoreTake(ring_buffer.data_available, pdMS_TO_TICKS(1000)) != pdTRUE)
-            continue;
-
-        /* Read frame from ring buffer */
-        size_t n = ring_buffer_read(buf, FRAME_MAX_SIZE);
-        if (n == 0) continue;
-
-        /* Write raw binary frame to file */
-        FILE *f = frame_logger_get_file();
-        if (f && fwrite(buf, 1, n, f) == n) {
-            frames_written++;
-        }
-
-        if (frames_written % 100 == 0) {
-            frame_logger_flush();
-            ESP_LOGI(TAG, "SD: %lu frames written", (unsigned long)frames_written);
-        }
-    }
-}
-#endif /* CONFIG_ENABLE_SD_CARD */
+#endif 
 
 /* ═══════════════════════════════════════════════════════════
  *  app_main
@@ -310,8 +132,9 @@ void ina219_start_task(System *sys) {
 #include <fcntl.h>
 #include <unistd.h>
 #include "esp_heap_caps.h"
-void sd_benchmark_task(void *pvParameters) {
-    ESP_LOGI("BENCHMARK", "Starting POSIX SD Card Write Speed Test...");
+
+void sd_fat32_benchmark_task(void *pvParameters) {
+    ESP_LOGI("SD-FAT32-BENCHMARK", "Starting POSIX SD Card Write Speed Test...");
 
     const size_t buffer_size = 4096;
     uint8_t *dummy_buffer = heap_caps_malloc(buffer_size, MALLOC_CAP_DMA);
@@ -372,78 +195,66 @@ void sd_benchmark_task(void *pvParameters) {
     vTaskDelete(NULL);
 }
 
-/*
-#include <fcntl.h>
-#include <unistd.h>
-#include "ff.h"
-#include "esp_vfs_fat.h"
-// 1. Allocate globally so it never touches the heap
-static uint8_t static_dummy_buffer[512];
-
-void sd_benchmark_task(void *pvParameters) {
-    ESP_LOGI("BENCHMARK", "Starting Static Memory Test...");
-
-    memset(static_dummy_buffer, 0xAA, sizeof(static_dummy_buffer));
-
-    int fd = open("/sd/bench.bin", O_WRONLY | O_CREAT | O_TRUNC, 0666);
-    if (fd < 0) {
-        ESP_LOGE("BENCHMARK", "failed to open file.");
+void sd_raw_benchmark_task(void *params) {
+    ESP_LOGI("SD-RAW-BENCHMARK", "Starting POSIX SD Card Write Speed Test...");
+    struct TaskParams *t_params = (struct TaskParams *)params;
+    struct SDContext *sd = (struct SDContext *)t_params->args;
+    const size_t buffer_size = 16384;
+    size_t sector_count = buffer_size / 512;
+    esp_err_t ret;
+    uint8_t *dummy_buffer = heap_caps_malloc(buffer_size, MALLOC_CAP_DMA);
+    if (dummy_buffer == NULL) {
+        ESP_LOGE("SD-RAW-BENCHMARK", "Failed to allocate buffer!");
         vTaskDelete(NULL);
         return;
     }
+    memset(dummy_buffer, 0xAA, buffer_size);
 
+    const int iterations = 1000;
+    int successful_writes = 0;
 
-// 2. Pre-allocate 1000 sectors (512 KB)
-// We jump to the end, write one byte, and then come back.
-// This forces FatFs to find and link all the clusters in between.
-if (lseek(fd, (1000 * 512) - 1, SEEK_SET) != -1) {
-    write(fd, "\0", 1); 
-    fsync(fd); // Force the FAT table to write the changes to the SD card NOW
-    lseek(fd, 0, SEEK_SET); // Go back to the start for your benchmark
-    printf("Pre-allocation (512KB) finished.\n");
-}
+    ESP_LOGI("SD-RAW-BENCHMARK", "Writing %d MB of data...", (iterations * buffer_size) / (1024 * 1024));
 
-    for (int i = 0; i < 1000; i++) {
+    int64_t start_time_us = esp_timer_get_time();
 
-        ssize_t written = write(fd, static_dummy_buffer, 512);
-    
-        if (written == 512) {
-            ESP_LOGI("BENCHMARK", "Write %d successful", i);
+    for (int i = 0; i < iterations; i++) {
+        int64_t t1 = esp_timer_get_time();
+        ret = sdmmc_write_sectors(
+            &sd->card, 
+            dummy_buffer, 
+            sd->starting_sector, 
+            sector_count);
+        sd->starting_sector += sector_count;
+        int64_t t2 = esp_timer_get_time();
+        printf("Write took: %lld us \n", (t2 - t1));
+        if (ESP_OK == ret) {
+            successful_writes++;
         } else {
-            break;
+            ESP_LOGE("SD-RAW-BENCHMARK", "Write failed at iteration %d! Error: %s", i, esp_err_to_name(ret));
+            break; // Stop if the hardware fails
         }
 
+        //ret = spi_sd_pre_erase(&sd->card, sector_count);
+        //if (ret != ESP_OK) {
+        //    ESP_LOGE("SD-RAW-BENCHMARK", "something went wrong with pre-allocation: %s", esp_err_to_name(ret));
+        //}
     }
 
-    close(fd);
+    int64_t end_time_us = esp_timer_get_time();
+
+    heap_caps_free(dummy_buffer);
+
+    int64_t time_taken_us = end_time_us - start_time_us;
+    float time_taken_sec = (float)time_taken_us / 1000000.0f;
+    uint32_t total_bytes_written = successful_writes * buffer_size;
+    float speed_kbs = (total_bytes_written / 1024.0f) / time_taken_sec;
+
+    ESP_LOGI("BENCHMARK", "=== RESULTS ===");
+    ESP_LOGI("BENCHMARK", "Speed: %.2f KB/s", speed_kbs);
+    ESP_LOGI("BENCHMARK", "===============");
+
     vTaskDelete(NULL);
 }
-
-#include "sdmmc_cmd.h"
-void sd_safe_read_test(void *pvParameters) {
-    ESP_LOGI("SAFE_TEST", "Starting Safe Raw Read Test...");
-    struct TaskParams *tparams = (struct TaskParams*)pvParameters;
-    sdmmc_card_t *card = (sdmmc_card_t *)tparams->args;
-
-    // Static buffer to avoid heap issues
-    static uint8_t raw_buffer[512];
-
-    // READ Sector 0 exactly 1000 times. Completely non-destructive.
-    for (int i = 0; i < 1000; i++) {
-        esp_err_t err = sdmmc_read_sectors(card, raw_buffer, 0, 1);
-
-        if (err == ESP_OK) {
-            if (i % 100 == 0) ESP_LOGI("SAFE_TEST", "Read %d successful", i);
-        } else {
-            ESP_LOGE("SAFE_TEST", "Read %d failed: %s", i, esp_err_to_name(err));
-            break;
-        }
-    }
-
-    ESP_LOGI("SAFE_TEST", "Safe Test Complete.");
-    vTaskDelete(NULL);
-}
-*/
 
 void logging_start_task(System *sys) {
     // TODO:
@@ -458,7 +269,8 @@ void logging_start_task(System *sys) {
     params.log_buffer = sys->log_buffer;
     params.context = NULL;
     //params.args = (void *)&sys->open_log_file;
-    params.args = (void *)sys->card;
+    //params.args = (void *)sys->card;
+    params.args = (void *)&sys->sd_ctxt;
     
     /*
     setvbuf(sys->open_log_file, NULL, _IONBF, 0);
@@ -474,14 +286,14 @@ void logging_start_task(System *sys) {
     memset(dummy_buffer, 0xAA, buffer_size);
 
     */
-    fclose(sys->open_log_file);
+    close(sys->open_log_file);
     /*
     sys_fs_unmount(sys->card);
     */
     
     
     xTaskCreatePinnedToCore(
-        sd_benchmark_task,
+        sd_raw_benchmark_task,
         "sd_benchmark_task",
         16384,
         (void *)&params,
@@ -504,6 +316,35 @@ void logging_start_task(System *sys) {
 
     // TODO: link this task to the system:
     // sys->tasks.logging = logging_handle;
+}
+
+void sys_manager(void *args) {
+    System *sys = (System *) args;
+    uint8_t active_events = 0;
+
+    while(1) {
+        xSemaphoreTake(sys->context.manager_up, portMAX_DELAY);
+
+        /* Grab Event */
+        taskENTER_CRITICAL(&sys->context.events_guard);
+        active_events = sys->context.events;
+        sys->context.events = 0; // Reset for the next event
+        taskEXIT_CRITICAL(&sys->context.events_guard);
+
+        /* Process Event */
+        if (active_events & EVT_SHOCK_3G_DETECTED) {
+            if (MODE_ARMED == sys->context.mode) {
+                sys->context.mode = MODE_BOOST;
+            }
+        }
+        if (active_events & EVT_TERMINATE_LOG) {
+            // TODO: this event doesn't exist anymore
+            ESP_LOGI("MAIN", "Umount fs.");
+            close(sys->open_log_file);
+            sys_fs_unmount(sys->card);
+        }
+        /* if (active_events & ANOTHER_EVENT ) */
+    }
 }
 
 //--- System Functions --//
@@ -529,8 +370,7 @@ void sysP2I_init(System *sys) {
                                                  */
         sys->record->boot_count++;
     }
-    /* NOTE: This is nice if we are plugged, but if it fails mid flight then
-     * printing all of LOGES/LOGIS is a waster of time. */
+
     ESP_LOGI(TAG, "╔══════════════════════════════════╗");
     ESP_LOGI(TAG, "║     Star-PI Payload  v2.0        ║");
     ESP_LOGI(TAG, "╚══════════════════════════════════╝");
@@ -573,34 +413,6 @@ void sysP2I_init(System *sys) {
 
 
 
-void sys_manager(void *args) {
-    System *sys = (System *) args;
-    uint8_t active_events = 0;
-
-    while(1) {
-        xSemaphoreTake(sys->context.manager_up, portMAX_DELAY);
-
-        /* Grab Event */
-        taskENTER_CRITICAL(&sys->context.events_guard);
-        active_events = sys->context.events;
-        sys->context.events = 0; // Reset for the next event
-        taskEXIT_CRITICAL(&sys->context.events_guard);
-
-        /* Process Event */
-        if (active_events & EVT_SHOCK_3G_DETECTED) {
-            if (MODE_ARMED == sys->context.mode) {
-                sys->context.mode = MODE_BOOST;
-            }
-        }
-        if (active_events & EVT_TERMINATE_LOG) {
-            ESP_LOGI("MAIN", "Umount fs.");
-            fclose(sys->open_log_file);
-            sys_fs_unmount(sys->card);
-        }
-        /* if (active_events & ANOTHER_EVENT ) */
-    }
-}
-
 void sysP2I_POST(System *sys){
     /**
      * Power-On Self-Test
@@ -638,21 +450,37 @@ void sysP2I_POST(System *sys){
 
 #if CONFIG_ENABLE_GPS
     if (sys->health & (1 << GPS_UART_HEALTH)) {
-        if (ESP_OK == gps_init(GPS_UART)) {
-            sys->health |= (1 << GPS_HEALTH);
-            // gps_start_task(sys);
+        if (ESP_OK == gps_probe(GPS_UART)) {
+            ESP_LOGI(TAG, "GPS found at 9600, upgrading...");
+            gps_upgrade_baud_115200(GPS_UART);
+        }
+        if (ESP_OK == sys_uart_baud(GPS_UART, GPS_UART_BAUD115200)) {
+            sys_uart_flush(GPS_UART);
+            if (ESP_OK == gps_probe(GPS_UART)) {
+                sys->health |= (1 << GPS_HEALTH);
+                gps_disable_non_essential_NMEA(GPS_UART);
+                gps_start_task(sys);
+            } else {
+                ESP_LOGE(TAG, "GPS probe failed at 115200.");
+            }
+        } else {
+            ESP_LOGE(TAG, "Couldn't upgrade ESP's for GPS.");
+            sys->health &= ~(1 << GPS_UART_HEALTH);
         }
     }
 #endif
 
 #if CONFIG_ENABLE_SD_SPI
     if (sys->health & (1 << SD_HEALTH)) {
-        if (ESP_OK == sys_fs_mount(SD_PORT, &sys->card)) {
+        if (ESP_OK == sys_sd_init(SD_PORT, &sys->sd_ctxt.card, &sys->sd_ctxt.starting_sector)) {
             sys->health |= (1 << FILESYSTEM_HEALTH);
+            // logging_start_task(sys);
+            /*
             if (ESP_OK == logging_init(&sys->open_log_file, FLIGHT_LOG_FILE_PATH)) {
                 sys->health |= (1 << LOG_FILE_HEALTH);
                 logging_start_task(sys);
             }
+            */
         }
     }
 #endif
@@ -675,7 +503,7 @@ void sysP2I_POST(System *sys){
 
 void app_main(void)
 {   
-    System sys;
+    static System sys;
     sysP2I_init(&sys);
     sysP2I_POST(&sys);
 
@@ -687,7 +515,7 @@ void app_main(void)
     //      - (opt.) Remote Sensor banning, since we can visually see if the sensor is failing.
     //               This will require parsing data from LoRA (advanced).
     // TODO: BOOST:
-    //      - LoRA OFF
+    //      - BLT OFF
     //      - A failure here triggers a HOT start:
     //        * sys_init() 
     //        * sys_POST() might be ingored depending on the failure, if it was a powere failure, then
@@ -703,12 +531,7 @@ void app_main(void)
 
     /* ── 6. Heartbeat / watchdog loop ────────────────────── */
     while (1) {
-        // ESP_LOGI(TAG, "Heartbeat | buf=%d bytes | sensors=%d",(int)ring_buffer_available(), s_num_sensors);
         vTaskDelay(pdMS_TO_TICKS(5000));
     }
 
-    /* unreachable, but good practice */
-#if CONFIG_ENABLE_SD_CARD
-    frame_logger_deinit();
-#endif
 }

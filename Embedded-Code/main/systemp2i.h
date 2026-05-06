@@ -58,6 +58,11 @@ struct TaskParams {
     void              *args;
 };
 
+struct SDContext {
+    sdmmc_card_t card;
+    size_t starting_sector;
+};
+
 typedef struct {
     struct Interfaces port;
     uint16_t health; /* LSB: Devices health
@@ -66,8 +71,9 @@ typedef struct {
     LoggerBuffer *log_buffer;
     HMBuffer     *hm_buffer;
     FlightRecord *record;
-    FILE *open_log_file;
+    int open_log_file;
     sdmmc_card_t *card;
+    struct SDContext sd_ctxt;
 } System;
 
 /* System States */

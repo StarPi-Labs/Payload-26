@@ -16,207 +16,40 @@
 #include "freertos/task.h"
 #include "frame_logger.h"
 #include "health_monitoring.h"
+#include "nmea.h"
 
 #include <string.h>
 
 static const char *TAG = "GPS";
 
-#define BUF_SIZE                1024
-#define TIMEOUT_INIT            20          // Timeout on receiving the dataset
-#define GPS_MAX_INIT_ATTEMPTS   1024        // Number of attempts including returned 
+
+/* Overall GPS Interface parameters */
+#define MAX_FAILED_ATTEMPTS     5       // if the GPS' uart fails to read 5 
+                                        // consecutive times, gps is flagged
+                                        // dead.
+
+#define GPS_BUF_SIZE            1024
+#define TIMEOUT_INIT            20      // Timeout on receiving the dataset
+#define GPS_MAX_INIT_ATTEMPTS   1024    // Number of attempts including returned 
                                         // read bytes being 0, this depends on 
                                         // the number of NMEA sentences we are 
                                         // having.
 
-#define MIN_NMEA                "$xxGGA"    // According to the doc, we only need:
-                                            // - $xxRMC // status the most important
-                                            // - $xxGGA // time, lat and long.
-                                            // where: 'xx' means it could be any two words there.
-                                            // Remember we are using this onnly to 
-                                            // see if the GPS is alive.
-#define MIN_NMEA_SZ             6           // strlen(MIN_NMEA)
-
-
-
-/* Double-buffered latest NMEA sentence */
-static volatile bool s_new_data = false;
-
-#define MAX_FAILED_ATTEMPTS     5   // if the GPS' uart fails to read 5 
-                                        // consecutive times, gps is flagged
-                                        // dead.
-
-/* SENTENCES OF INTEREST ALREADY RECEIVED */
-enum {
-    RMC_FLAG_SENTENCE,
-    GGA_FLAG_SENTENCE,
-};
+#define MIN_NMEA                "$xxGGA"// According to the doc, we only need:
+                                        // - $xxRMC // status the most important
+                                        // - $xxGGA // time, lat and long.
+                                        // where: 'xx' means it could be any two words there.
+                                        // Remember we are using this onnly to 
+                                        // see if the GPS is alive.
+#define MIN_NMEA_SZ             6       // strlen(MIN_NMEA)
+                                        //
 #define NMEA_READY_INFO ((1 << RMC_FLAG_SENTENCE) | (1 << GGA_FLAG_SENTENCE))
 
-/* NMEA PARSING */
-enum {
-    WAIT_SYNC, SKIP_TALKER_1, SKIP_TALKER_2, CHECK_ID_1, CHECK_ID_2, CHECK_ID_3,
-    WAIT_COMMA, PARSE_RMC, PARSE_GGA, IGNORE_LINE
-};
-
-void parse_nmea(struct GPSInfo *gps_info, uint8_t byte) {
-    static uint8_t state = WAIT_SYNC;
-    static uint8_t candidate_state = 0; 
-    static int comma_count = 0;
-    static int char_count = 0;
-
-    if (byte == '$') {
-        state = SKIP_TALKER_1;
-        return;
-    }
-
-
-    switch(state) {
-        case SKIP_TALKER_1:
-            state = SKIP_TALKER_2;
-            break;
-
-        case SKIP_TALKER_2:
-            state = CHECK_ID_1;
-            break;
-
-        case CHECK_ID_1:
-            switch(byte) {
-            case 'R': 
-                candidate_state = PARSE_RMC;
-                state = CHECK_ID_2;
-                break;
-            case 'G':
-                candidate_state = PARSE_GGA;
-                state = CHECK_ID_2;
-                break;
-            default:
-                state = IGNORE_LINE;
-            }
-           break;
-        case CHECK_ID_2:
-            if ((candidate_state == PARSE_RMC && byte == 'M') || 
-                (candidate_state == PARSE_GGA && byte == 'G'))
-                state = CHECK_ID_3;
-            else 
-                state = IGNORE_LINE;
-            break;
-
-        case CHECK_ID_3:
-
-            comma_count = 0;
-            if ((candidate_state == PARSE_RMC && byte == 'C') ||
-                (candidate_state == PARSE_GGA && byte == 'A'))
-                state = WAIT_COMMA;
-            else 
-                state = IGNORE_LINE;
-            break;
-
-        case WAIT_COMMA:
-            if (byte == ',') {
-                state = candidate_state;
-                comma_count = 1;
-            }
-            break;
-
-        case PARSE_RMC:
-
-            if (byte == '*') { 
-                gps_info->available |= 1 << RMC_FLAG_SENTENCE;
-                state = WAIT_SYNC; 
-                return; 
-            }
-
-            if (byte == ',') { 
-                comma_count++; 
-                char_count = 0;
-                return; 
-            }
-
-            // You are now online parsing RMC!
-            switch(comma_count) {
-            case 2: // STATUS
-                gps_info->status = byte;
-                break;
-            case 7: // SPEED
-                gps_info->speed[char_count++] = byte;
-                if (char_count > GPS_SPEED_STR_SZ){ 
-                    // This technique will avoid segmentation faults by 
-                    // avoiding buffer over flow
-                    state = WAIT_SYNC;
-                    return;
-                }
-                break;
-            case 8: // COURSE OF MOVEMENT
-                gps_info->course[char_count++] = byte;
-                if (char_count > GPS_COURSE_STR_SZ) {
-                    state = WAIT_SYNC;
-                    return;
-                }
-                break;
-            }
-            break;
-
-        case PARSE_GGA:
-
-            if (byte == '*') {
-                gps_info->available |= 1 << GGA_FLAG_SENTENCE; 
-                state = WAIT_SYNC; 
-                return;
-            } 
-            if (byte == ',') { 
-                comma_count++; 
-                char_count = 0;
-                return; 
-            }
-
-            // You are now online parsing GGA!
-            switch(comma_count) {
-            case 1: // TIME
-                gps_info->time[char_count++] = byte;
-                if (char_count > GPS_TIME_STR_SZ) {
-                    state = WAIT_SYNC;
-                    return;
-                }
-                break;
-            case 2: // LATITUDE
-                gps_info->lat[char_count++] = byte;
-                if (char_count > GPS_LAT_STR_SZ) {
-                    state = WAIT_SYNC;
-                    return;
-                }
-                break;
-            case 3: // LATITUDE DIR N/S
-                gps_info->lat_orientation = byte;
-                break;
-            case 4: // LONGITUDE
-                gps_info->lon[char_count++] = byte;
-                if (char_count > GPS_LON_STR_SZ) {
-                    state = WAIT_SYNC;
-                    return;
-                }
-                break;
-            case 5: // LONGITUDE DIR W/E
-                gps_info->lon_orientation = byte;
-                break;
-            case 7: // NUMER OF SATELLITES CONNECTED
-                gps_info->sat_count[char_count++] = byte;
-                if (char_count > GPS_SATCOUNT_STR_SZ) {
-                    state = WAIT_SYNC;
-                    return;
-                }
-                break;
-            }
-            break;
-
-        case IGNORE_LINE:
-            // Do absolutely nothing until the next '$' arrives
-            break;
-
-        default:
-            state = WAIT_SYNC;
-            break;
-    }
-}
+/* UBX Configuration Command */
+#define UBX_M10_NMEA_NO_GLL "$PUBX,40,GLL,0,0,0,0,0,0*5C\r\n\0"
+#define UBX_M10_NMEA_NO_GSA "$PUBX,40,GSA,0,0,0,0,0,0*4E\r\n\0"
+#define UBX_M10_NMEA_NO_GSV "$PUBX,40,GSV,0,0,0,0,0,0*59\r\n\0"
+#define UBX_M10_NMEA_NO_VTG "$PUBX,40,VTG,0,0,0,0,0,0*5E\r\n\0"
 
 /* ── UART background task ─────────────────────────────────── */
 void gps_rx_task(void *arg) {
@@ -259,8 +92,7 @@ void gps_rx_task(void *arg) {
             case MODE_POST:
             case MODE_ARMED:
                 // This for debugging only
-                /*
-                ESP_LOGI(TAG,"Status %c, speed %s, course %s, time %s, lat %s %c, lon %s %c, sats %s", \
+                ESP_LOGI(TAG,"Status %c, speed %s, course %s, time %s, lat %s %c, lon %s %c, sats %s, alt %s", \
                     gps_info.status, \
                     gps_info.speed, \
                     gps_info.course, \
@@ -269,9 +101,9 @@ void gps_rx_task(void *arg) {
                     gps_info.lat_orientation, \
                     gps_info.lon, \
                     gps_info.lon_orientation, \
-                    gps_info.sat_count
+                    gps_info.sat_count, \
+                    gps_info.alt
                     );
-                */
 
                 telemetry_counter++;
                 if (telemetry_counter >= GPS_HM_SKIP_SAMPLES) {
@@ -308,11 +140,11 @@ void gps_rx_task(void *arg) {
 /* ── Public API ───────────────────────────────────────────── */
 
 
-esp_err_t gps_init(uart_port_t port) {
+esp_err_t gps_probe(uart_port_t port) {
     int attempts;
 
     /* to read GPS data */
-    uint8_t data[BUF_SIZE] = {0};
+    uint8_t data[GPS_BUF_SIZE] = {0};
     int len;
 
     /* to find NMEA */
@@ -323,25 +155,26 @@ esp_err_t gps_init(uart_port_t port) {
     /* Wait for NMEA of interest defined in MIN_NMEA */
     j = 0;
     for (attempts = 0; attempts < GPS_MAX_INIT_ATTEMPTS; attempts++) {
-        len = uart_read_bytes(port, data, BUF_SIZE, TIMEOUT_INIT / portTICK_PERIOD_MS);
+        len = uart_read_bytes(port, data, GPS_BUF_SIZE, TIMEOUT_INIT / portTICK_PERIOD_MS);
 
         if (len < 0) {
             ESP_LOGE(TAG, "Nothing received on GPS UART PORT, timeout.");
             return ESP_ERR_TIMEOUT;
 
         } else if (len > 0) {
-            // NOTE: This length check is only because uart_read_bytes might touch
-            // the buffer even if it returns zero. It's a way to say, i don't trust 
+            // NOTE: 
+            // Length check is done only because uart_read_bytes might touch
+            // the buffer even if len returns zero. It's a way to say, i don't trust 
             // you, uart_read_bytes. I don't like it, but safety reasons. 
             for (d = data; *d; d++) {
                 if ((required_min_NMEA[j] == *d) || (1 == j) || (2 == j)) {
                     j++;
+                    if (MIN_NMEA_SZ == j)
+                        return ESP_OK;
+
                 } else {
                     j = 0;
                 }
-
-                if (MIN_NMEA_SZ == j)
-                    return ESP_OK;
 
                 *d = 0;
             }
@@ -349,6 +182,36 @@ esp_err_t gps_init(uart_port_t port) {
     }
 
     return ESP_ERR_INVALID_RESPONSE;
+}
+
+void gps_upgrade_baud_115200(uart_port_t port) {
+    // NOTE: 
+    // GPS for prototyping was actually M8 not M10 as said, so, the configuration
+    // for M10 was not being tested yet.
+    
+    // M8 Series configuration 
+    const uint8_t m8q_baud_115200[] = {
+    0xB5, 0x62, 0x06, 0x00, 0x14, 0x00, 0x01, 0x00, 0x00, 0x00,
+    0xD0, 0x08, 0x00, 0x00, 0x00, 0xC2, 0x01, 0x00, 0x07, 0x00,
+    0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0xC0, 0x7E
+    };
+
+    // M10 Series (M10Q) 115200 Baud Command (VALSET)
+    /*
+    const uint8_t m10_baud[] = {
+        0xB5, 0x62, 0x06, 0x8A, 0x0C, 0x00, 0x00, 0x01, 0x00, 0x00, 0x01, 0x00,
+        0x01, 0x40, 0x00, 0xC2, 0x01, 0x00, 0xB1, 0x72
+    };
+    */
+
+    uart_write_bytes(port, (const char*)m8q_baud_115200, 28);
+    uart_wait_tx_done(port, pdMS_TO_TICKS(40));
+}
+void gps_disable_non_essential_NMEA(uart_port_t port) {
+    uart_write_bytes(port, UBX_M10_NMEA_NO_GLL, strlen(UBX_M10_NMEA_NO_GLL));
+    uart_write_bytes(port, UBX_M10_NMEA_NO_GSA, strlen(UBX_M10_NMEA_NO_GSA));
+    uart_write_bytes(port, UBX_M10_NMEA_NO_GSV, strlen(UBX_M10_NMEA_NO_GSV));
+    uart_write_bytes(port, UBX_M10_NMEA_NO_VTG, strlen(UBX_M10_NMEA_NO_VTG));
 }
 
 // TODO: remove this drivers

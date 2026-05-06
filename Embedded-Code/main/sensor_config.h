@@ -50,13 +50,14 @@
 
 /*-- GPS UART --*/
 #define GPS_UART                UART_NUM_2
+#define GPS_UART_BAUD115200     115200
 #define GPS_TX                  CONFIG_GPS_TXD_PIN
 #define GPS_RX                  CONFIG_GPS_RXD_PIN
 #define GPS_BAUD                CONFIG_GPS_BAUD_RATE
 #define GPS_RX_BUF_SZ           1024
 #define GPS_CORE                0
 #define GPS_PRIORITY            1                       // Low priority, it is slow
-#define GPS_HM_SKIP_SAMPLES     2                      // Skip samples while on Health Monitor
+#define GPS_HM_SKIP_SAMPLES     2                       // Skip samples while on Health Monitor
 
 /*-- HEALTH_MONITOR UART --*/
 // NOTE: Deprecated
@@ -73,6 +74,11 @@
 #define PIN_SD_CMD              CONFIG_SD_CMD_PIN
 #define PIN_SD_D0               CONFIG_SD_D0_PIN
 #define FLIGHT_LOG_FILE_PATH    "/sd/pstarpi.bin"          // Name should be short
+#define SD_INIT_SECTOR          4059008
+#define SD_LAST_SECTOR          4169599
+#define SD_SECTOR_COUNT         110592
+#define SD_INIT_SECTOR_CONTENT  "ROCKET_START_2026"
+#define SD_INIT_SECTOR_CONTENT_SZ 17
 #define LOGGING_PRIORITY        1
 #define LOGGING_CORE            0
 

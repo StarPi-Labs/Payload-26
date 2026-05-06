@@ -18,3 +18,7 @@ sys_uart_init (
     int tx_buf_sz, 
     int rx_buf_sz
 );
+
+
+esp_err_t sys_uart_baud(uart_port_t port, int baud);
+void sys_uart_flush(uart_port_t port);

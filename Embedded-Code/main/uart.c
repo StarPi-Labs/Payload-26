@@ -8,6 +8,14 @@
 
 static const char *TAG = "UART";
 
+esp_err_t sys_uart_baud(uart_port_t port, int baud) {
+    return uart_set_baudrate(port, baud);
+}
+
+void sys_uart_flush(uart_port_t port) {
+    uart_flush_input(port);
+}
+
 esp_err_t 
 sys_uart_init (
     uart_port_t port, 
