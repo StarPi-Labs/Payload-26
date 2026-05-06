@@ -299,10 +299,8 @@ def hardware_handler():
         with data_guard:
             updated_data = new_data
       except Exception as e:
-        # Catch the parser crash, log it, and keep the thread alive!
         print(f"\n[!] Frame parser choked! Error: {e}")
         print(f"[!] Bad data chunk: {available}")
-        # Reset remainder so we don't poison the next frame
         remainder = b''
         continue
 
@@ -329,7 +327,7 @@ server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 server.bind(('0.0.0.0', 5000))
 server.listen(1)
 
-MAX_ALLOCATED_THREADS = 10 # Set your strict limit here
+MAX_ALLOCATED_THREADS = 10
 
 print("Shadow Tool Online. Waiting for browser...")
 

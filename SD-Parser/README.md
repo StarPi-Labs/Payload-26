@@ -4,7 +4,8 @@
 |MODULE|status|
 |------|------|
 |GPS   | ready|
-|INA219 (current) | ongoing... |
+|INA219 (current) | ready |
+|MPU6050 | ongoing... |
 
 1. (Ubuntu based) Run from file
 ``` bash
