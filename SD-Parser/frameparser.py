@@ -13,16 +13,25 @@ INA219_MAX_VOLT = 16.0
 INA219_ADC_BITS = 2**12
 INA219_SHUNT_OMH= 0.1
 
+# PACKET TYPES:
+PACKET_TYPE_MPU6050  = 0x01
+PACKET_TYPE_BME680   = 0x02
+PACKET_TYPE_MQ10     = 0x04
+PACKET_TYPE_INA219   = 0x08
+PACKET_TYPE_SYSSTATE = 0x10
+PACKET_TYPE_RESERV0  = 0x20
+PACKET_TYPE_RESERV1  = 0x40
+PACKET_TYPE_RESERV2  = 0x80
 
 PACKET_DEFS = {
-    0x01: {'name': 'MPU6050',   'fmt': '<3f', 'size': 12},
-    0x02: {'name': 'BME680',    'fmt': '<3f', 'size': 12},
-    0x04: {'name': 'MQ10',      'fmt': '<c10s10s10s11sc12sc4s', 'size': 60}, 
-    0x08: {'name': 'INA219',    'fmt': '<2h', 'size': 4}, # TODO: check it on the code
-    0x10: {'name': 'SYSSTATE',  'fmt': '<d', 'size': 1}, # TODO: check it on the code
-    0x20: {'name': 'RESERVED0', 'fmt': '<3f', 'size': 1}, # Reserved for future sensors
-    0x40: {'name': 'RESERVED1', 'fmt': '<3f', 'size': 1}, # Reserved for future sensors
-    0x80: {'name': 'RESERVED2', 'fmt': '<3f', 'size': 1}, # Reserved for future sensors
+    PACKET_TYPE_MPU6050:  {'name': 'MPU6050',   'fmt': '<3f', 'size': 12},
+    PACKET_TYPE_BME680:   {'name': 'BME680',    'fmt': '<3f', 'size': 12},
+    PACKET_TYPE_MQ10:     {'name': 'MQ10',      'fmt': '<c10s10s10s11sc12sc4s8s', 'size': 68}, 
+    PACKET_TYPE_INA219:   {'name': 'INA219',    'fmt': '<2h', 'size': 4},
+    PACKET_TYPE_SYSSTATE: {'name': 'SYSSTATE',  'fmt': '<d', 'size': 1}, # TODO: size? check it on the code
+    PACKET_TYPE_RESERV0:  {'name': 'RESERVED0', 'fmt': '<3f', 'size': 1}, # Reserved for future sensors
+    PACKET_TYPE_RESERV1:  {'name': 'RESERVED1', 'fmt': '<3f', 'size': 1}, # Reserved for future sensors
+    PACKET_TYPE_RESERV2:  {'name': 'RESERVED2', 'fmt': '<3f', 'size': 1}, # Reserved for future sensors
 }
 
 def calculate_crc16(data: bytes) -> int:
@@ -94,9 +103,15 @@ def proc_gps(ddict, draw):
         if len(nmea_field_str) > 0:
             ddict['gpsLon_W'] = nmea_field_str
 
+        # GPS Satellite Counts
         nmea_field_str = draw[8].decode('ascii').strip('\x00')
         if len(nmea_field_str) > 0:
             ddict['sat_count']= int(nmea_field_str)
+
+        # GPS Altitude 
+        nmea_field_str = draw[9].decode('ascii').strip('\x00')
+        if len(nmea_field_str) > 0:
+            ddict['gpsAlt'] = float(nmea_field_str)
 
     except UnicodeDecodeError:
         ddict['frame-status'] = '0'
@@ -153,11 +168,11 @@ def parse_frame_stream_bin(buffer):
             payload_bytes
         )
         
-        print(f"[{timestamp_ms} ms] {PACKET_DEFS[packet_type]['name']} Data: {payload_tuple}")
-        if packet_type == 0x04: # GPS (ASCII)
+        if packet_type == PACKET_TYPE_MQ10: # GPS (ASCII)
+            print(f"[{timestamp_ms} ms] {PACKET_DEFS[packet_type]['name']} Data: {payload_tuple}")
             proc_gps(data[-1], payload_tuple)
 
-        elif packet_type == 0x08: # INA216
+        elif packet_type == PACKET_TYPE_INA219: # INA216, voltage sensor
             proc_ina219(data[-1], payload_tuple)
 
         else:

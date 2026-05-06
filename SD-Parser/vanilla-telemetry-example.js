@@ -11,6 +11,10 @@ const unsubscribeData = TelemetryAPI.subscribeToData((newData) => {
         document.getElementById('utc').innerText = dateStr;
     }
 
+    if (newData.gpsAlt) {
+        document.getElementById('gps_alt').innerText = newData.gpsAlt.toFixed(6);
+    }
+
     if (newData.gpsLock) {
         document.getElementById('gps_status').innerText = newData.gpsLock;
     }

@@ -36,6 +36,7 @@ SCHEMA = {'time' :              'd',
           'gpsLon':             'f',
           'gpsLon_W':           'c',
           'gpsLock':            'c',
+          'gpsAlt':             'f',
           'pitch':              'f',
           'roll':               'f',
           'yaw':                'f',
@@ -278,6 +279,7 @@ def hardware_handler():
         if stream_type == 'serial':
             available = src_stream.read(28)
         else:
+            # NOTE: This needs to load larger numbers of data, the size of a page 32KB
             available = src_stream.read(10)
             if available is None:
                 break

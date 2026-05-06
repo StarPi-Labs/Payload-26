@@ -25,6 +25,7 @@ export const TelemetryAPI = (function() {
         { name: 'gpsLon',             type: 'f32' },
         { name: 'gpsLon_W',           type: 'c'   },
         { name: 'gpsLock',            type: 'c'   },
+        { name: 'gpsAlt',             type: 'f32' },
         { name: 'pitch',              type: 'f32' },
         { name: 'roll',               type: 'f32' },
         { name: 'yaw',                type: 'f32' },
