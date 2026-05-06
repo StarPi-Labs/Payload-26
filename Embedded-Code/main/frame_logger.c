@@ -11,6 +11,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <unistd.h>
+#include <fcntl.h>
 
 #if CONFIG_ENABLE_SD_CARD
 #include <sys/stat.h>
@@ -307,7 +308,7 @@ FILE *frame_logger_get_file(void)
 // This buffer is used for storage
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
-#define SECTOR_SIZE 4096    // 8 blocks of SD card (512 bytes each).
+#define SECTOR_SIZE     16384 // 4096    // 8 blocks of SD card (512 bytes each).
                             
 struct LoggerBuffer {
     portMUX_TYPE guard;     // Legacy
@@ -384,10 +385,11 @@ write_to_ring_buffer(
     memcpy(my_write_pointer, payload, payload_size);
 }
 
-esp_err_t logging_init(FILE **file, char *filename) {
+esp_err_t logging_init(int *fd, char *filename) {
     // This is necessary, so checking the file existence is checked from the very begging
-    *file = fopen(filename, "ab");
-    if (NULL == *file) {
+    // TODO: This file should be open as APPEND+WRITE / NO CREATE
+    *fd = open(filename, O_WRONLY | O_CREAT | O_TRUNC, 0666);
+    if (*fd < 0) {
         return ESP_FAIL;
     }
     return ESP_OK;
@@ -401,16 +403,14 @@ esp_err_t logging_init(FILE **file, char *filename) {
 void logging_task(void *args) {
     struct TaskParams *tparams = (struct TaskParams *) args;
     struct LoggerBuffer *buf = tparams->log_buffer;
-    FILE **file = (FILE **)tparams->args;
+    int *fd = (int *)tparams->args;
     uint8_t write_counter = 0;
+    ssize_t written = 0;
 
-    if (NULL == *file) {
+    if (*fd < 0) {
         // TODO: trigger health or attempt to open it again.
-        while(1);
-    }
-
-    if (setvbuf(*file, NULL, _IONBF, 0) != 0) {
-        // TODO: trigger health or attempt to open it again.
+        // Try to mount and open the file again, i guess, but this is not supposed to be negative here.
+        ESP_LOGI(TAG,"File descriptor error.");
         while(1);
     }
 
@@ -422,12 +422,17 @@ void logging_task(void *args) {
             // it fails. Probably writing failures will be linked to SD 
             // disconnection, so, re-mounting will be required. This is an extreme
             // hardware requirement.
-            // 2. flash
-            fwrite((void *)buf->active_save_buffer, 1, SECTOR_SIZE, *file);
-            write_counter++;
+            // 2. flush
+            // 3. TODO: this will be probably be removed, since we are wrting raw on sectors.
+            written = write(*fd, (const void *)buf->active_save_buffer, SECTOR_SIZE);
+            if (written == SECTOR_SIZE) {
+                // TODO: what happens if it fails?
+                write_counter++;
+            }
+
             // update FAT table every whole double buffer write.
             if (write_counter & 0x1) {
-                fsync(fileno(*file));
+                fsync(*fd);
             }
         }
     }

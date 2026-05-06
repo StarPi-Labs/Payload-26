@@ -107,7 +107,7 @@ typedef struct {
     uint16_t sensor_bitmap;     /**< Which sensors are present */
 } frame_builder_t;
 
-esp_err_t logging_init(FILE **file, char *filename);
+esp_err_t logging_init(int *fd, char *filename);
 void logging_task(void *arg);
 
 /**
