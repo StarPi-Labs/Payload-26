@@ -430,7 +430,9 @@ void sysP2I_POST(System *sys){
     hm_start_task(sys);
     
     if (sys->health & (1 << I2C0_HEALTH)) {
-        if (ESP_OK == mpu6050_init(sys->port.mpu6050)) sys->health |= (1 << MPU6050_HEALTH);
+        if (ESP_OK == mpu6050_init(sys->port.mpu6050)) {
+            sys->health |= (1 << MPU6050_HEALTH);
+        }
     }
 
     if (sys->health & (1 << I2C1_HEALTH)) {

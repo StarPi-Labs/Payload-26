@@ -66,28 +66,28 @@ menu "Star-PI Payload Configuration"
 
     config I2C0_MASTER_SDA
         int "I2C0 SDA GPIO"
-        default 21
+        default 26
         depends on ENABLE_I2C_BUS
         help
             GPIO number for I2C master data line.
 
     config I2C0_MASTER_SCL
         int "I2C0 SCL GPIO"
-        default 22
+        default 27
         depends on ENABLE_I2C_BUS
         help
             GPIO number for I2C0 master clock line.
 
     config I2C1_MASTER_SDA
         int "I2C1 SDA GPIO"
-        default 26
+        default 13
         depends on ENABLE_I2C_BUS
         help
             GPIO number for I2C1 master data line.
 
     config I2C1_MASTER_SCL
         int "I2C1 SCL GPIO"
-        default 27
+        default 14
         depends on ENABLE_I2C_BUS
         help
             GPIO number for I2C1 master clock line.
@@ -118,6 +118,26 @@ menu "Star-PI Payload Configuration"
         depends on ENABLE_GPS
 
     comment "──── SD Card Pin Configuration ────"
+
+    config SD_SPI_MOSI_PIN
+        int "SD SPI MOSI GPIO"
+        default 23
+        depends on ENABLE_SD_SPI
+
+    config SD_SPI_MISO_PIN
+        int "SD SPI MISO GPIO"
+        default 19
+        depends on ENABLE_SD_SPI
+
+    config SD_SPI_SCLK_PIN
+        int "SD SPI SCLK GPIO"
+        default 18
+        depends on ENABLE_SD_SPI
+
+    config SD_SPI_CS_PIN
+        int "SD SPI CS PIN"
+        default 5
+        depends on ENABLE_SD_SPI
 
     config SD_CLK_PIN
         int "SD CLK GPIO"

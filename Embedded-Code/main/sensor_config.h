@@ -73,6 +73,10 @@
 #define PIN_SD_CLK              CONFIG_SD_CLK_PIN
 #define PIN_SD_CMD              CONFIG_SD_CMD_PIN
 #define PIN_SD_D0               CONFIG_SD_D0_PIN
+#define SDSPI_MOSI              CONFIG_SD_SPI_MOSI_PIN
+#define SDSPI_MISO              CONFIG_SD_SPI_MISO_PIN
+#define SDSPI_CLK               CONFIG_SD_SPI_SCLK_PIN
+#define SDSPI_CS                CONFIG_SD_SPI_CS_PIN
 #define FLIGHT_LOG_FILE_PATH    "/sd/pstarpi.bin"          // Name should be short
 #define SD_INIT_SECTOR          4059008
 #define SD_LAST_SECTOR          4169599

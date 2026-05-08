@@ -13,9 +13,9 @@
 esp_err_t sys_hardware_sd_init(spi_host_device_t spi_port) {
     esp_err_t ret;
     spi_bus_config_t bus_cfg = {
-        .mosi_io_num = GPIO_NUM_13,
-        .miso_io_num = GPIO_NUM_12,
-        .sclk_io_num = GPIO_NUM_14, // 14
+        .mosi_io_num = SDSPI_MOSI,
+        .miso_io_num = SDSPI_MISO,
+        .sclk_io_num = SDSPI_CLK, // 14
         .quadwp_io_num = -1,
         .quadhd_io_num = -1,
         .max_transfer_sz = 8192
@@ -272,7 +272,7 @@ esp_err_t _sd_initialization(spi_host_device_t spi_port, sdmmc_card_t *card) {
     host.command_timeout_ms = 10000;
     
     sdspi_device_config_t slot_cfg = SDSPI_DEVICE_CONFIG_DEFAULT();
-    slot_cfg.gpio_cs = GPIO_NUM_15;
+    slot_cfg.gpio_cs = SDSPI_CS;
     slot_cfg.host_id = spi_port;
 
     sdspi_dev_handle_t handle;
