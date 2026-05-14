@@ -25,12 +25,17 @@
  *  mapping without hardcoding the drivers to specific pins
  * ────────────────────────────────────────────────────────── */
 /*-- MPU6050 --*/
+#define I2C_MASTER_CLK          CONFIG_I2C_MASTER_FREQUENCY
+#define MPU6050_I2C             I2C_NUM_0
 #define MPU6050_SDA             CONFIG_I2C0_MASTER_SDA
 #define MPU6050_SCL             CONFIG_I2C0_MASTER_SCL
+#define MPU6050_INT_PIN         34
 #define MPU6050_CORE            1
 #define MPU6050_PRIORITY        5                       // Highest Priority
+#define MPU6050_HM_SKIP_SAMPLES 1000
 
 /*-- BME680/INA219 --*/
+#define BME_INA_I2C             I2C_NUM_1
 #define BME_INA_SDA             CONFIG_I2C1_MASTER_SDA
 #define BME_INA_SCL             CONFIG_I2C1_MASTER_SCL
 #define INA219_CORE             1

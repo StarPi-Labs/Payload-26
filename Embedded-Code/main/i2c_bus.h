@@ -12,8 +12,11 @@
  * Initialise the I2C master buses.
  * Call once from app_main before any sensor init.
  */
-esp_err_t sys_i2c0_init(gpio_num_t sda_pin, gpio_num_t scl_pin);
-esp_err_t sys_i2c1_init(gpio_num_t sda_pin, gpio_num_t scl_pin);
+esp_err_t 
+sys_i2c_init(
+    i2c_port_num_t i2c_port, 
+    gpio_num_t sda_pin, 
+    gpio_num_t scl_pin);
 
 /**
  * Binds bus and device

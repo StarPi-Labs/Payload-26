@@ -92,6 +92,7 @@ void gps_rx_task(void *arg) {
             case MODE_POST:
             case MODE_ARMED:
                 // This for debugging only
+                /*
                 ESP_LOGI(TAG,"Status %c, speed %s, course %s, time %s, lat %s %c, lon %s %c, sats %s, alt %s", \
                     gps_info.status, \
                     gps_info.speed, \
@@ -104,9 +105,11 @@ void gps_rx_task(void *arg) {
                     gps_info.sat_count, \
                     gps_info.alt
                     );
+                */
 
                 telemetry_counter++;
                 if (telemetry_counter >= GPS_HM_SKIP_SAMPLES) {
+                    gps_info.available = 0;
                     hm_send(
                         tparams->hm_buffer, 
                         SBIT_MQ10, 
@@ -114,7 +117,6 @@ void gps_rx_task(void *arg) {
                         sizeof(struct GPSInfo) - 1
                     );  // the available field is not send
                     telemetry_counter = 0;
-                    gps_info.available = 0;
                 }
                 break;
  

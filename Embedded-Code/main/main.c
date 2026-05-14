@@ -128,6 +128,27 @@ void ina219_start_task(System *sys) {
     // sys->tasks.ina216 = ina219_handler;
 }
 
+void mpu6050_start_task(System *sys) {
+    static TaskHandle_t mpu6050_handle = NULL;
+    static struct TaskParams tparams;
+
+    tparams.hm_buffer = sys->hm_buffer;
+    tparams.log_buffer= sys->log_buffer;
+    tparams.context = &sys->context;
+    tparams.args = (void *)&sys->port.mpu6050;
+
+    xTaskCreatePinnedToCore(
+        mpu6050_task,
+        "mpu6050_task",
+        4096,
+        (void *)&tparams,
+        MPU6050_PRIORITY,
+        &mpu6050_handle,
+        MPU6050_CORE);
+
+    mpu6050_start_isr(&mpu6050_handle);
+}
+
 #include "esp_timer.h" // For microsecond-accurate timing
 #include <fcntl.h>
 #include <unistd.h>
@@ -348,8 +369,17 @@ void sys_manager(void *args) {
 }
 
 //--- System Functions --//
+// TODO: we might not need this
+//#include "esp_pm.h"
 
 void sysP2I_init(System *sys) {
+    
+    /* TODO: we might not need this
+    esp_pm_lock_handle_t pm_lock;
+    esp_pm_lock_create(ESP_PM_CPU_FREQ_MAX, 0, "i2c_fix", &pm_lock);
+    esp_pm_lock_acquire(pm_lock);
+    */
+
     sys->context.mode = MODE_INIT;
     sys->record = &global_flight_record;
     esp_reset_reason_t reason = esp_reset_reason();
@@ -380,13 +410,13 @@ void sysP2I_init(System *sys) {
 
     /* ── 1. I2C bus (shared by all I2C sensors) ──────────── */
 #if CONFIG_ENABLE_I2C_BUS
-    err = sys_i2c0_init(MPU6050_SDA, MPU6050_SCL);
+    err = sys_i2c_init(MPU6050_I2C, MPU6050_SDA, MPU6050_SCL);
     if (ESP_OK == err) {
         sys->health |= 1 << I2C0_HEALTH;
         sys->port.mpu6050 = i2c_bus0_get_handle();
     }
 
-    err = sys_i2c1_init(BME_INA_SDA, BME_INA_SCL);
+    err = sys_i2c_init(BME_INA_I2C, BME_INA_SDA, BME_INA_SCL);
     if (ESP_OK == err) {
         sys->health |= 1 << I2C1_HEALTH;
         sys->port.bme_ina = i2c_bus1_get_handle();
@@ -432,6 +462,7 @@ void sysP2I_POST(System *sys){
     if (sys->health & (1 << I2C0_HEALTH)) {
         if (ESP_OK == mpu6050_init(sys->port.mpu6050)) {
             sys->health |= (1 << MPU6050_HEALTH);
+            mpu6050_start_task(sys);
         }
     }
 

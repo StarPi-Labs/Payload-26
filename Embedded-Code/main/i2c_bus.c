@@ -78,9 +78,10 @@ i2c_bus_init(
         .sda_io_num        = sda_pin,
         .scl_io_num        = scl_pin,
         .clk_source        = I2C_CLK_SRC_DEFAULT,
-        .glitch_ignore_cnt = 7,
-        .flags.enable_internal_pullup = true,
+        .glitch_ignore_cnt = 14,
+        .flags.enable_internal_pullup = false,
     };
+        //.flags.enable_internal_pullup = true,
 
     esp_err_t ret = i2c_new_master_bus(&bus_cfg, handler);
 
@@ -94,20 +95,26 @@ i2c_bus_init(
     return ret;
 }
 
-esp_err_t sys_i2c0_init(gpio_num_t sda_pin, gpio_num_t scl_pin) {
-    return i2c_bus_init(
-            I2C_NUM_0, 
-            sda_pin, 
-            scl_pin, 
-            &s_bus0_handle);
-}
-
-esp_err_t sys_i2c1_init(gpio_num_t sda_pin, gpio_num_t scl_pin) {
-    return i2c_bus_init(
-            I2C_NUM_1, 
-            sda_pin, 
-            scl_pin, 
-            &s_bus1_handle);
+esp_err_t 
+sys_i2c_init(
+    i2c_port_num_t i2c_port, 
+    gpio_num_t sda_pin, 
+    gpio_num_t scl_pin
+) {
+    i2c_master_bus_handle_t *tmp_handle;
+    switch (i2c_port) {
+    case I2C_NUM_0:
+        tmp_handle = &s_bus0_handle; break;
+    case I2C_NUM_1:
+        tmp_handle = &s_bus1_handle; break;
+    default:
+        return ESP_ERR_INVALID_ARG;
+    }
+    return i2c_bus_init(i2c_port, 
+                sda_pin, 
+                scl_pin, 
+                tmp_handle);
+ 
 }
 
 i2c_master_bus_handle_t i2c_bus0_get_handle(void) {
@@ -133,9 +140,9 @@ i2c_bind (
     i2c_device_config_t dev_cfg = {
         .dev_addr_length = I2C_ADDR_BIT_LEN_7,
         .device_address = device_addr,
-        .scl_speed_hz = 100000,
+        .scl_speed_hz = I2C_MASTER_CLK,
     };
-        // .scl_speed_hz = CONFIG_I2C_MASTER_FREQUENCY,
+        //.scl_speed_hz = I2C_MASTER_CLK,
     esp_err_t err = i2c_master_bus_add_device(bus, &dev_cfg, dev);
     return err;
 }

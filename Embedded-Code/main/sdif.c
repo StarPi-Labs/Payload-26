@@ -238,7 +238,7 @@ _sector_initialization(
     uint8_t* buffer = heap_caps_malloc(512, MALLOC_CAP_DMA); // DMA-capable memory
     *starting_sector = SD_INIT_SECTOR;
                                                              
-    /* This is optional */
+    /* This is compulsory to be executed before hand, so we have a clean memory */
     //ret = _erase_sectors(card, SD_INIT_SECTOR, SD_SECTOR_COUNT);
     //if (ret != ESP_OK) {
     //    ESP_LOGE(SDIF_TAG, "Couldn't remove the sector %s", esp_err_to_name(ret));
