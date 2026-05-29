@@ -17,6 +17,7 @@ export const TelemetryAPI = (function() {
         { name: 'accelerationX',      type: 'f32' },
         { name: 'accelerationY',      type: 'f32' },
         { name: 'accelerationZ',      type: 'f32' },
+        { name: 'imu_temp',           type: 'f32' },
         { name: 'temperature',        type: 'f32' },
         { name: 'pressure',           type: 'f32' },
         { name: 'humidity',           type: 'f32' },

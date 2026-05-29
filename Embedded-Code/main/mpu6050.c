@@ -28,6 +28,18 @@ static const char *TAG = "MPU6050";
 #define REG_WHO_AM_I            0x75
 #define VAL_WHO_AM_I            0x68
 
+/* Configuration Values */
+#define MPU6050_SAMPLERATE_1Khz 0x07    // - No recommended for FAT32 loggers
+#define MPU6050_SAMPLERATE_80hz 0x63    // - I think on FAT32 logging, this can 
+                                        //   go up to 100hz
+#define MPU6050_LPF_260Hz       0x00    // - Recommended for high sampling rate (> 500hz)
+#define MPU6050_LPF_21Hz        0x04    // - Recommended for 80Hz sampling rate 
+#define MPU6050_GYRO_500deg     0x08    // - Ask Flight dynamics if they can tell the maximum rotation
+#define MPU6050_ACCEL_16g       0x18    // - Wide dynamic range for boosting
+#define MPU6050_ACCEL_2g        0x00    // - Narrow dynamic range for coasting (or ballistic)
+#define MPU6050_INT_UP_50us     0x00    // - Interruption pin, active high, pull-up, pulse active for 50us.
+#define MPU6050_INT_BIT_STATUS  0x01    // - Enable bit status
+
 #define MPU6050_DATA_LEN        14     /* accel(6) + temp(2) + gyro(6) */
 
 #define MPU6050_MAX_FAILED_ATTEMPTS 60
@@ -39,23 +51,19 @@ static i2c_master_dev_handle_t s_dev = NULL;
 void _enable_interruption_locally(void) {
     if (ESP_OK != gpio_set_direction(MPU6050_INT_PIN, GPIO_MODE_INPUT)) {
         ESP_LOGE(TAG, "Couldn't set INT Pin as inpu");
-        // return ESP_ERR_INVALID_ARG;
         return;
     }
     if (ESP_OK != gpio_set_pull_mode(MPU6050_INT_PIN, GPIO_PULLUP_ONLY)) {
         ESP_LOGE(TAG, "Couldn't set with pullups.");
-        // return ESP_ERR_INVALID_ARG;
         return;
     }
     if (ESP_OK != gpio_set_intr_type(MPU6050_INT_PIN, GPIO_INTR_POSEDGE)) {
         ESP_LOGE(TAG, "Couldn't set interrup for positive edge.");
-        // return ESP_ERR_INVALID_ARG;
         return;
     }
     esp_err_t ret = gpio_install_isr_service(0);
     if (ESP_OK != ret) {
         ESP_LOGE(TAG, "Couldn't install ISR: %s", esp_err_to_name(ret));
-        //return ESP_ERR_INVALID_ARG;
         return;
     }
 }
@@ -79,11 +87,11 @@ esp_err_t mpu6050_config(void) {
     
     /* IMU Configuration */
     cfg_payload[0] = REG_SMPLRT_DIV;    // Starting register
-    cfg_payload[1] = 0x07;              // 1Khz Sampling Rate
-    cfg_payload[2] = 0x00;              // Low pass filter: (Acc) 260Hz, (Gyro) 256Hz
-    cfg_payload[3] = 0x08;              // Gyro Range: 500deg/s
-    cfg_payload[4] = 0x18;              // Accel Range: 16g
-                                        //
+    cfg_payload[1] = MPU6050_SAMPLERATE_80hz;
+    cfg_payload[2] = MPU6050_LPF_21Hz;
+    cfg_payload[3] = MPU6050_GYRO_500deg;
+    cfg_payload[4] = MPU6050_ACCEL_2g;
+                                    
     ret = i2c_master_transmit(s_dev, cfg_payload, sizeof(cfg_payload), MPU6050_TIMEOUT_1000ms);
     if (ret == ESP_ERR_TIMEOUT) {
         ESP_LOGE(TAG, "Something went wrong in stream configugation: %s.", esp_err_to_name(ret));
@@ -91,8 +99,9 @@ esp_err_t mpu6050_config(void) {
     
     /* Interruption PIN configuration */
     cfg_payload[0] = REG_INT_PIN_CFG;
-    cfg_payload[1] = 0x00;              // Active high, push-pull, 50us pulse
-    cfg_payload[2] = 0x01;              // data ready eanbled bit
+    cfg_payload[1] = MPU6050_INT_UP_50us;
+    cfg_payload[2] = MPU6050_INT_BIT_STATUS;// Debug only, because we will 
+                                            // never read this while fully operational
     ret = i2c_master_transmit(s_dev, cfg_payload, 3, MPU6050_TIMEOUT_1000ms);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Interrupt configuration went wrong %s.", esp_err_to_name(ret));
@@ -141,6 +150,7 @@ union MPU6050Info {
     int16_t info[MPU6050_DATA_LEN / 2];
 };
 
+// TODO: we probably dont need this.
 #include "esp_timer.h"
 
 void mpu6050_raw2int(int16_t *dest, uint8_t *src) {
@@ -199,6 +209,7 @@ void mpu6050_task(void *arg) {
             vTaskDelay(pdMS_TO_TICKS(10)); // 10 ms breath
             if (MPU6050_MAX_FAILED_ATTEMPTS == attempts){
                 // TODO:should I report this event? MPU6050 down?
+                // TODO: yes, we should.
                 break;
             }
             continue;
@@ -215,7 +226,7 @@ void mpu6050_task(void *arg) {
             if (telemetry_counter >= MPU6050_HM_SKIP_SAMPLES) {
                 telemetry_counter = 0;
                 // DEBUGGING ONLY {
-                ESP_LOGI(TAG, "%d %d %d %d %d %d %d\n", mpu_info[0], mpu_info[1], mpu_info[2], mpu_info[3], mpu_info[4], mpu_info[5], mpu_info[6]);
+                // ESP_LOGI(TAG, "%d %d %d %d %d %d %d\n", mpu_info[0], mpu_info[1], mpu_info[2], mpu_info[3], mpu_info[4], mpu_info[5], mpu_info[6]);
                 // }
  
                 hm_send(
@@ -225,6 +236,7 @@ void mpu6050_task(void *arg) {
                     MPU6050_DATA_LEN);
             }
             // TODO:  check acceleration larger than 3g to change state
+            //
             break;
         case MODE_BOOST:
         case MODE_COAST:
@@ -233,6 +245,10 @@ void mpu6050_task(void *arg) {
                 SBIT_MPU6050,
                 (uint8_t *)mpu_info,
                 MPU6050_DATA_LEN);
+            // TODO: Check when acceleration is below 2g to change mpu dynamic range
+            // if (longitudinal_ACCEL < 1.5g) {
+            // sp_err_t ret = i2c_bus_write_byte(s_dev, REG_ACCEL_CONFIG, MPU6050_ACCEL_2g);
+            // }
             break;
         }
     }

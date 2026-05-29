@@ -35,7 +35,7 @@
         }
 
         .container {
-            max-width: 900px;
+            max-width: 1200px;
             width: 100%;
             display: flex;
             flex-direction: column;
@@ -252,8 +252,87 @@
                     <span class="unit">mA</span>
                 </div>
             </div>
+            <div class="box">
+                <div class="label">Acceleration</div>
+                <div class="data-row">
+                    <span id="accel" class="val">0.00</span> 
+                    <span class="unit">m/s^2</span>
+                </div>
+            </div>
+            <div class="box">
+                <div class="label">IMU-Temperature</div>
+                <div class="data-row">
+                    <span id="imu_temp" class="val">0.00</span> 
+                    <span class="unit">°C</span>
+                </div>
+            </div>
+            <div class="box">
+                <div class="label">X-Acceleration</div>
+                <div class="data-row">
+                    <span id="accelx" class="val">0.00</span> 
+                    <span class="unit">m/s^2</span>
+                </div>
+            </div>
+            <div class="box">
+                <div class="label">Y-Acceleration</div>
+                <div class="data-row">
+                    <span id="accely" class="val">0.00</span> 
+                    <span class="unit">m/s^2</span>
+                </div>
+            </div>
+            <div class="box">
+                <div class="label">Z-Acceleration</div>
+                <div class="data-row">
+                    <span id="accelz" class="val">0.00</span> 
+                    <span class="unit">m/s^2</span>
+                </div>
+            </div>
+            <div class="box">
+                <div class="label">Roll/s</div>
+                <div class="data-row">
+                    <span id="roll" class="val">0.00</span> 
+                    <span class="unit">deg/s</span>
+                </div>
+            </div>
+            <div class="box">
+                <div class="label">Pitch/s</div>
+                <div class="data-row">
+                    <span id="pitch" class="val">0.00</span> 
+                    <span class="unit">deg/s</span>
+                </div>
+            </div>
+             <div class="box">
+                <div class="label">Yaw/s</div>
+                <div class="data-row">
+                    <span id="yaw" class="val">0.00</span> 
+                    <span class="unit">deg/s</span>
+                </div>
+            </div>
+
+            <div class="box">
+    <div class="label">Rocket Attitude Indicator</div>
+    <div style="height: 180px; display: flex; align-items: center; justify-content: center; perspective: 400px; margin-top: 12px; background-color: #333; border-radius: 12px; overflow: hidden; position: relative;">
+
+        <div id="css-rocket" style="width: 60px; height: 140px; position: relative; transition: transform 0.1s linear; transform-origin: center 60%;">
+
+            <div style="width: 100%; height: 70%; position: absolute; bottom: 0; background-color: var(--md-primary); border-radius: 30px 30px 8px 8px; border: 2px solid var(--md-on-primary-container);">
+                <div style="width: 2px; height: 100%; background-color: white; margin: 0 auto;"></div>
+            </div>
+
+            <div style="width: 0; height: 0; position: absolute; top: -10px; left: 10px; border-left: 20px solid transparent; border-right: 20px solid transparent; border-bottom: 30px solid var(--md-primary);"></div>
+
+            <div style="width: 20px; height: 30px; position: absolute; bottom: 5px; left: -15px; background-color: var(--md-on-primary-container); border-radius: 8px; transform: rotate(-30deg);"></div>
+            <div style="width: 20px; height: 30px; position: absolute; bottom: 5px; right: -15px; background-color: var(--md-on-primary-container); border-radius: 8px; transform: rotate(30deg);"></div>
+
+            <div style="width: 40px; height: 15px; position: absolute; bottom: -5px; left: 10px; background-color: var(--md-primary-container); border-radius: 4px; border: 1px solid var(--md-outline);"></div>
+
         </div>
 
+    </div>
+            </div>
+
+ 
+        </div>
         <div id="status">Link State: Disconnected</div>
     </div>
     <script type="module" src="telemetry-use.js"></script>

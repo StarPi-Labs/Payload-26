@@ -1,5 +1,6 @@
 import serial
 import struct 
+import math
 from datetime import datetime
 
 # --- 1. PROTOCOL DEFINITION ---
@@ -23,8 +24,19 @@ PACKET_TYPE_RESERV0  = 0x20
 PACKET_TYPE_RESERV1  = 0x40
 PACKET_TYPE_RESERV2  = 0x80
 
+"""
+NOTE:
+- fmt:
+    f: float (4 bytes)
+    c: char (1 byte)
+    s: string 
+    h: int16 (2 bytes)
+    d: int (8 bytes?)
+
+- size: measure in bytes.
+""" 
 PACKET_DEFS = {
-    PACKET_TYPE_MPU6050:  {'name': 'MPU6050',   'fmt': '<3f', 'size': 12},
+    PACKET_TYPE_MPU6050:  {'name': 'MPU6050',   'fmt': '<7h', 'size': 14},
     PACKET_TYPE_BME680:   {'name': 'BME680',    'fmt': '<3f', 'size': 12},
     PACKET_TYPE_MQ10:     {'name': 'MQ10',      'fmt': '<c10s10s10s11sc12sc4s8s', 'size': 68}, 
     PACKET_TYPE_INA219:   {'name': 'INA219',    'fmt': '<2h', 'size': 4},
@@ -34,14 +46,35 @@ PACKET_DEFS = {
     PACKET_TYPE_RESERV2:  {'name': 'RESERVED2', 'fmt': '<3f', 'size': 1}, # Reserved for future sensors
 }
 
+# NOTE: acceleration sensity changes based on the flying state
+mpu6050_accel_sensitivity = 2048.0
+mpu6050_gyro_sensitivity = 65.5
+
 def calculate_crc16(data: bytes) -> int:
     # TODO: implement this heheh
     return 0xFFFF
 
+def proc_mpu6050(ddict, draw):
+    """
+    Processes data from MPU6050
+    Input: 
+    - ddict: dictionary to fill
+    - draw: data raw in binary
+    """
+
+    ddict['accelerationX'] = draw[0] / mpu6050_accel_sensitivity
+    ddict['accelerationY'] = draw[1] / mpu6050_accel_sensitivity
+    ddict['accelerationZ'] = draw[2] / mpu6050_accel_sensitivity
+    ddict['acceleration'] = math.sqrt(ddict['accelerationX']**2 + ddict['accelerationY']**2 + ddict['accelerationZ']**2)
+    ddict['imu_temp'] = draw[3] / 340 + 36.53
+    ddict['roll'] = draw[4] / mpu6050_gyro_sensitivity
+    ddict['pitch'] = draw[5] / mpu6050_gyro_sensitivity
+    ddict['yaw'] = draw[6] / mpu6050_gyro_sensitivity
+
 def proc_ina219(ddict, draw):
 
     """
-    Processes data from the INA219 voltage and powere sensors:
+    Processes data from INA219, voltage sensor:
     Input:
     - ddict: dictionary to fill
     - draw: data raw in binary
@@ -169,11 +202,14 @@ def parse_frame_stream_bin(buffer):
         )
         
         if packet_type == PACKET_TYPE_MQ10: # GPS (ASCII)
-            print(f"[{timestamp_ms} ms] {PACKET_DEFS[packet_type]['name']} Data: {payload_tuple}")
+            # print(f"[{timestamp_ms} ms] {PACKET_DEFS[packet_type]['name']} Data: {payload_tuple}")
             proc_gps(data[-1], payload_tuple)
 
         elif packet_type == PACKET_TYPE_INA219: # INA216, voltage sensor
             proc_ina219(data[-1], payload_tuple)
+
+        elif packet_type == PACKET_TYPE_MPU6050: # MPU6050, IMU sensor
+            proc_mpu6050(data[-1], payload_tuple)
 
         else:
            print(f"[{timestamp_ms} ms] {PACKET_DEFS[packet_type]['name']} Data: {payload_tuple}")

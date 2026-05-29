@@ -32,7 +32,7 @@
 #define MPU6050_INT_PIN         34
 #define MPU6050_CORE            1
 #define MPU6050_PRIORITY        5                       // Highest Priority
-#define MPU6050_HM_SKIP_SAMPLES 1000
+#define MPU6050_HM_SKIP_SAMPLES 4
 
 /*-- BME680/INA219 --*/
 #define BME_INA_I2C             I2C_NUM_1
