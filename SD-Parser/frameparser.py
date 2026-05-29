@@ -209,6 +209,7 @@ def parse_frame_stream_bin(buffer):
             proc_ina219(data[-1], payload_tuple)
 
         elif packet_type == PACKET_TYPE_MPU6050: # MPU6050, IMU sensor
+            # print(f"[{timestamp_ms} ms] {PACKET_DEFS[packet_type]['name']} Data: {payload_tuple}")
             proc_mpu6050(data[-1], payload_tuple)
 
         else:
