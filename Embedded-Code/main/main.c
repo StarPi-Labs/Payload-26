@@ -216,75 +216,12 @@ void sd_fat32_benchmark_task(void *pvParameters) {
     vTaskDelete(NULL);
 }
 
-void sd_raw_benchmark_task(void *params) {
-    ESP_LOGI("SD-RAW-BENCHMARK", "Starting POSIX SD Card Write Speed Test...");
-    struct TaskParams *t_params = (struct TaskParams *)params;
-    struct SDContext *sd = (struct SDContext *)t_params->args;
-    const size_t buffer_size = 16384;
-    size_t sector_count = buffer_size / 512;
-    esp_err_t ret;
-    uint8_t *dummy_buffer = heap_caps_malloc(buffer_size, MALLOC_CAP_DMA);
-    if (dummy_buffer == NULL) {
-        ESP_LOGE("SD-RAW-BENCHMARK", "Failed to allocate buffer!");
-        vTaskDelete(NULL);
-        return;
-    }
-    memset(dummy_buffer, 0xAA, buffer_size);
-
-    const int iterations = 1000;
-    int successful_writes = 0;
-
-    ESP_LOGI("SD-RAW-BENCHMARK", "Writing %d MB of data...", (iterations * buffer_size) / (1024 * 1024));
-
-    int64_t start_time_us = esp_timer_get_time();
-
-    for (int i = 0; i < iterations; i++) {
-        int64_t t1 = esp_timer_get_time();
-        ret = sdmmc_write_sectors(
-            &sd->card, 
-            dummy_buffer, 
-            sd->starting_sector, 
-            sector_count);
-        sd->starting_sector += sector_count;
-        int64_t t2 = esp_timer_get_time();
-        printf("Write took: %lld us \n", (t2 - t1));
-        if (ESP_OK == ret) {
-            successful_writes++;
-        } else {
-            ESP_LOGE("SD-RAW-BENCHMARK", "Write failed at iteration %d! Error: %s", i, esp_err_to_name(ret));
-            break; // Stop if the hardware fails
-        }
-
-        //ret = spi_sd_pre_erase(&sd->card, sector_count);
-        //if (ret != ESP_OK) {
-        //    ESP_LOGE("SD-RAW-BENCHMARK", "something went wrong with pre-allocation: %s", esp_err_to_name(ret));
-        //}
-    }
-
-    int64_t end_time_us = esp_timer_get_time();
-
-    heap_caps_free(dummy_buffer);
-
-    int64_t time_taken_us = end_time_us - start_time_us;
-    float time_taken_sec = (float)time_taken_us / 1000000.0f;
-    uint32_t total_bytes_written = successful_writes * buffer_size;
-    float speed_kbs = (total_bytes_written / 1024.0f) / time_taken_sec;
-
-    ESP_LOGI("BENCHMARK", "=== RESULTS ===");
-    ESP_LOGI("BENCHMARK", "Speed: %.2f KB/s", speed_kbs);
-    ESP_LOGI("BENCHMARK", "===============");
-
-    vTaskDelete(NULL);
-}
+#include <errno.h>
 
 void logging_start_task(System *sys) {
-    // TODO:
-    // do not open the run the task yet, because the file is open.
-    // test writing the into the sd card here. several times until 
-    // the sdcards stops.
-    // we need to close the file, because file is open
     static TaskHandle_t logging_handle = NULL;
     static struct TaskParams params;
+    static FILE *f = NULL;
 
     params.hm_buffer = NULL;
     params.log_buffer = sys->log_buffer;
@@ -292,48 +229,24 @@ void logging_start_task(System *sys) {
     //params.args = (void *)&sys->open_log_file;
     //params.args = (void *)sys->card;
     params.args = (void *)&sys->sd_ctxt;
-    
-    /*
-    setvbuf(sys->open_log_file, NULL, _IONBF, 0);
-    fprintf(sys->open_log_file, "Test IONBF");
 
-    const size_t buffer_size = 512;
-    uint8_t *dummy_buffer = malloc(buffer_size);
-    if (dummy_buffer == NULL) {
-        ESP_LOGE("BENCHMARK", "Failed to allocate buffer!");
-        vTaskDelete(NULL);
+    f = fopen(FLIGHT_LOG_FILE_PATH, "wb");
+    if (NULL == f) {
+        ESP_LOGE(TAG, "Failed to open %s for appending. err: %s", FLIGHT_LOG_FILE_PATH, strerror(errno));
         return;
     }
-    memset(dummy_buffer, 0xAA, buffer_size);
+    params.args = (void *)f;
+    ESP_LOGW("DEBUG", "1. fopen created FILE at address: %p", (void *)f);
 
-    */
-    close(sys->open_log_file);
-    /*
-    sys_fs_unmount(sys->card);
-    */
-    
-    
     xTaskCreatePinnedToCore(
-        sd_raw_benchmark_task,
-        "sd_benchmark_task",
+        logging_task,
+        "logging_task",
         16384,
         (void *)&params,
         LOGGING_PRIORITY,
         &logging_handle,
         LOGGING_CORE
     );
-
-    /*
-    xTaskCreatePinnedToCore(
-        logging_task,
-        "logging_task",
-        4096,
-        (void *)&params,
-        LOGGING_PRIORITY,
-        &logging_handle,
-        LOGGING_CORE
-    );
-    */
 
     // TODO: link this task to the system:
     // sys->tasks.logging = logging_handle;
@@ -362,7 +275,7 @@ void sys_manager(void *args) {
             // TODO: this event doesn't exist anymore
             ESP_LOGI("MAIN", "Umount fs.");
             close(sys->open_log_file);
-            sys_fs_unmount(sys->card);
+            sys_fs_unmount(&sys->card);
         }
         /* if (active_events & ANOTHER_EVENT ) */
     }
@@ -429,7 +342,6 @@ void sysP2I_init(System *sys) {
 #endif
 
 #if CONFIG_ENABLE_SD_SPI
-    // TODO: maybe this function is not declared anywhere, so we should implement it.
     err = sys_hardware_sd_init(SD_PORT);
     sys->health |= (err == ESP_OK) << SD_HEALTH;
 #endif
@@ -505,16 +417,21 @@ void sysP2I_POST(System *sys){
 
 #if CONFIG_ENABLE_SD_SPI
     if (sys->health & (1 << SD_HEALTH)) {
+        sys->sd_ctxt.card = & sys->card;
+        if (ESP_OK == sys_mount_spi_card(SD_PORT, SD_MOUNT_POINT, &sys->sd_ctxt.card)) {
+            sys->health |= (1 << FILESYSTEM_HEALTH);
+            logging_start_task(sys);
+        }
+        /*
         if (ESP_OK == sys_sd_init(SD_PORT, &sys->sd_ctxt.card, &sys->sd_ctxt.starting_sector)) {
             sys->health |= (1 << FILESYSTEM_HEALTH);
             // logging_start_task(sys);
-            /*
             if (ESP_OK == logging_init(&sys->open_log_file, FLIGHT_LOG_FILE_PATH)) {
                 sys->health |= (1 << LOG_FILE_HEALTH);
                 logging_start_task(sys);
             }
-            */
         }
+        */
     }
 #endif
     /* Go/No-Go */
@@ -540,31 +457,19 @@ void app_main(void)
     sysP2I_init(&sys);
     sysP2I_POST(&sys);
 
-    // NOTE: SENSOR-CHECK, 
-    //      - This is a visual inspection procedure.
-    // TODO: IDLE/ARMED:
-    //      - Health monitoring, sending small packets through LoRA every 30 seconds or so
-    //      - A failure here triggers a WARM start: 
-    //      - (opt.) Remote Sensor banning, since we can visually see if the sensor is failing.
-    //               This will require parsing data from LoRA (advanced).
-    // TODO: BOOST:
-    //      - BLT OFF
-    //      - A failure here triggers a HOT start:
-    //        * sys_init() 
-    //        * sys_POST() might be ingored depending on the failure, if it was a powere failure, then
-    // TODO: COAST:
-    //      - Change accelerometer range
-    // TODO: TURN-OFF PROCEDURE (just if we use NVS). Physical button? command? 
-
     ESP_LOGI(TAG, "System Health 0x%04X", sys.health);
 
     if ((sys.health & SENSORS_HEALTH) == 0) {
         ESP_LOGW(TAG, "No sensors enabled! Enable at least one via menuconfig. System Health 0x%04X.", sys.health);
     }
 
+
+    sys.context.mode = MODE_BOOST;
+
     /* ── 6. Heartbeat / watchdog loop ────────────────────── */
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(5000));
     }
 
+    while(1);
 }

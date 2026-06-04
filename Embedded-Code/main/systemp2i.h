@@ -59,7 +59,7 @@ struct TaskParams {
 };
 
 struct SDContext {
-    sdmmc_card_t card;
+    sdmmc_card_t *card;
     size_t starting_sector;
 };
 
@@ -72,7 +72,7 @@ typedef struct {
     HMBuffer     *hm_buffer;
     FlightRecord *record;
     int open_log_file;
-    sdmmc_card_t *card;
+    sdmmc_card_t card;
     struct SDContext sd_ctxt;
 } System;
 

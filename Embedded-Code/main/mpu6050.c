@@ -239,7 +239,6 @@ void mpu6050_task(void *arg) {
             //
             break;
         case MODE_BOOST:
-        case MODE_COAST:
             write_to_ring_buffer(
                 tparams->log_buffer,
                 SBIT_MPU6050,
@@ -249,6 +248,14 @@ void mpu6050_task(void *arg) {
             // if (longitudinal_ACCEL < 1.5g) {
             // sp_err_t ret = i2c_bus_write_byte(s_dev, REG_ACCEL_CONFIG, MPU6050_ACCEL_2g);
             // }
+            break;
+
+        case MODE_COAST:
+            write_to_ring_buffer(
+                tparams->log_buffer,
+                SBIT_MPU6050,
+                (uint8_t *)mpu_info,
+                MPU6050_DATA_LEN);
             break;
         }
     }

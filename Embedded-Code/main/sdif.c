@@ -4,8 +4,6 @@
 #include "sensor_config.h"
 #include <string.h>
 
-#define SD_MOUNTING_POINT   "/sd"
-
 #ifdef CONFIG_ENABLE_SD_SPI
 
 #define SDIF_TAG "SDIF"
@@ -26,8 +24,7 @@ esp_err_t sys_hardware_sd_init(spi_host_device_t spi_port) {
 }
 
 void sys_fs_unmount(sdmmc_card_t *card) {
-    ESP_LOGI("SD", "Unmounting");
-    // esp_vfs_fat_sdcard_unmount(SD_MOUNTING_POINT, card);
+    esp_vfs_fat_sdcard_unmount(SD_MOUNT_POINT, card);
 }
 
 #define SD_SECTOR_PER_PAGE  64
@@ -230,6 +227,7 @@ esp_err_t manual_cmd38_erase(sdmmc_card_t *card, uint32_t start_sector, uint32_t
 
 
 
+// TODO: remove
 esp_err_t 
 _sector_initialization(
     sdmmc_card_t *card, 
@@ -264,7 +262,7 @@ _sector_initialization(
     return ESP_OK;
 }
 
-esp_err_t _sd_initialization(spi_host_device_t spi_port, sdmmc_card_t *card) {
+esp_err_t raw_sd_initialization(spi_host_device_t spi_port, sdmmc_card_t *card) {
     esp_err_t ret;
 
     sdmmc_host_t host = SDSPI_HOST_DEFAULT();
@@ -293,12 +291,58 @@ esp_err_t _sd_initialization(spi_host_device_t spi_port, sdmmc_card_t *card) {
     return ret;
 }
 
-esp_err_t sys_sd_init(spi_host_device_t spi_port, sdmmc_card_t *card, size_t *starting_sector) {
+void 
+get_spi_sd_config(
+    spi_host_device_t spi_port, 
+    sdmmc_host_t *host, 
+    sdspi_device_config_t *slot) 
+{
+    sdmmc_host_t default_host = SDSPI_HOST_DEFAULT();
+    sdspi_device_config_t default_slot = SDSPI_DEVICE_CONFIG_DEFAULT();
+
+    *host = default_host;
+    host->max_freq_khz = 20000;
+    host->command_timeout_ms = 10000;
+
+    *slot = default_slot;
+    slot->gpio_cs = SDSPI_CS;
+    slot->host_id = spi_port;
+}
+
+void get_fat_mount_config(esp_vfs_fat_sdmmc_mount_config_t *mount_config) {
+    mount_config->format_if_mount_failed = true;
+    mount_config->max_files = 5;
+    mount_config->allocation_unit_size = 16*1024;
+}
+
+esp_err_t 
+sys_mount_spi_card(
+    spi_host_device_t spi_port, 
+    const char* mount_point, 
+    sdmmc_card_t **card)
+{
+    sdmmc_host_t host;
+    sdspi_device_config_t slot;
+    esp_vfs_fat_sdmmc_mount_config_t mount_cfg;
+    
+    // Fetch configs
+    get_spi_sd_config(spi_port, &host, &slot);
+    get_fat_mount_config(&mount_cfg);
+    
+    return esp_vfs_fat_sdspi_mount(
+        mount_point, 
+        &host, 
+        &slot, 
+        &mount_cfg, 
+        card);
+}
+
+esp_err_t sys_sd_init_legacy(spi_host_device_t spi_port, sdmmc_card_t *card, size_t *starting_sector) {
     esp_log_level_set("sdmmc_init", ESP_LOG_DEBUG);
     esp_log_level_set("sdspi_host", ESP_LOG_DEBUG);
     *starting_sector = SD_INIT_SECTOR;
 
-    if (_sd_initialization(spi_port, card) != ESP_OK) {
+    if (raw_sd_initialization(spi_port, card) != ESP_OK) {
         return ESP_FAIL;
     }
    

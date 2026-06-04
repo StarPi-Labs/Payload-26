@@ -308,7 +308,7 @@ FILE *frame_logger_get_file(void)
 // This buffer is used for storage
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
-#define SECTOR_SIZE     16384 // 4096    // 8 blocks of SD card (512 bytes each).
+#define SECTOR_SIZE     8192    // 8 blocks of SD card (512 bytes each).
                             
 struct LoggerBuffer {
     portMUX_TYPE guard;     // Legacy
@@ -395,12 +395,44 @@ esp_err_t logging_init(int *fd, char *filename) {
     return ESP_OK;
 }
 
+void logging_task(void *args) {
+    struct TaskParams *tparams = (struct TaskParams *) args;
+    struct LoggerBuffer *buf = tparams->log_buffer;
+    FILE *f = (FILE *) tparams->args;
+    uint8_t write_counter = 0;
+    ssize_t written = 0;
+
+
+    if (NULL == f) {
+        ESP_LOGE(TAG, "File descriptor Empyt");
+        // TODO: report this event an and flag sd as broken.
+        while(1);
+    }
+    setvbuf(f, NULL, _IONBF, 0);
+
+    ESP_LOGW("DEBUG", "2. Task received FILE at address: %p", (void *)f);
+
+    while(1) {
+        xSemaphoreTake(buf->ready, portMAX_DELAY);
+        if (buf->active_save_buffer != NULL) {
+            written = fwrite((const void*) buf->active_save_buffer, 1, SECTOR_SIZE, f);
+            ESP_LOGI(TAG, "write_counter %d", written);
+            if (write_counter & 0x01) {
+                fsync(fileno(f));
+            }
+            if (written == SECTOR_SIZE) {
+                write_counter++;
+            }
+        }
+    }
+}
+
 /*
  * This is a high-performance task. Missing samples is FORBIDDEN!. By implementing
  * a double buffering mechanism and dumbing whole data into the SD card, the
  * required reliability is met.
  */
-void logging_task(void *args) {
+void logging_task_legacy(void *args) {
     struct TaskParams *tparams = (struct TaskParams *) args;
     struct LoggerBuffer *buf = tparams->log_buffer;
     int *fd = (int *)tparams->args;
