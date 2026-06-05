@@ -258,8 +258,9 @@ def hardware_handler():
     global stream_type
 
     armed_file = None
+    print("Stream Port", src_stream_port)
+    print("stream_type", stream_type)
     if stream_type == 'serial':
-
         src_stream = serial.Serial(src_stream_port, 115200, timeout=None)
         src_stream.reset_input_buffer()
         armed_file = open("armed_file.bin","wb")
@@ -281,9 +282,11 @@ def hardware_handler():
             available = src_stream.read(28)
         else:
             # NOTE: This needs to load larger numbers of data, the size of a page 32KB
-            available = src_stream.read(10)
+            available = src_stream.read(28)
             if available is None:
+                print("We are done")
                 break
+
         if armed_file is not None:
             armed_file.write(available)
 
@@ -299,6 +302,7 @@ def hardware_handler():
 
         with data_guard:
             updated_data = new_data
+
       except Exception as e:
         print(f"\n[!] Frame parser choked! Error: {e}")
         print(f"[!] Bad data chunk: {available}")

@@ -169,6 +169,7 @@ def parse_frame_stream_bin(buffer):
         packet_type = buffer[3]
 
         if packet_type not in PACKET_DEFS:
+            print(buffer, packet_type)
             buffer.pop(0)
             continue 
 
