@@ -4,8 +4,14 @@
 |MODULE|status|
 |------|------|
 |GPS   | ready|
-|INA219 (current) | ready |
-|MPU6050 | ongoing... |
+|INA219 | ready |
+|MPU6050 | ready |
+|BME680 | ongoing... |
+
+0. Sometimes this is the only thing you want to run:
+```
+python3 bin2json.py --source <path/to/bin/file> --output <path/to/json/file>
+```
 
 1. (Ubuntu based) Run from file
 ``` bash
