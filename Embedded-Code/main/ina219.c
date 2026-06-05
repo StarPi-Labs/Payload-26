@@ -176,7 +176,7 @@ typedef union {
     uint32_t raw_all; // This forces 4-byte alignment for the union
 } ina_data_t;
 
-void ina219_task(void *arg) {
+void IRAM_ATTR ina219_task(void *arg) {
     uint8_t shunt_volt[2] = {0xC, 0xA}, bus_volt[2] = {0xF, 0xE};
     uint8_t attempts = 0;
     uint16_t telemetry_counter = 0;
@@ -202,7 +202,6 @@ void ina219_task(void *arg) {
         ina219_info.bus_voltage   = (int16_t)((bus_volt[0] << 8) | bus_volt[1]);
         ina219_info.bus_voltage   = ina219_info.bus_voltage >> 3;
 
-        // ESP_LOGI(TAG, "Vs = %d, Vb = %d", ina219_info.values.shunt_voltage, ina219_info.values.bus_voltage);
         switch(tparams->context->mode) {
         case MODE_POST:
         case MODE_ARMED:
@@ -229,6 +228,7 @@ void ina219_task(void *arg) {
 
             break;
         }
+
         memset(&ina219_info, 0, sizeof(struct INA219Info));
         vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(INA219_PERIOD_default));
     }

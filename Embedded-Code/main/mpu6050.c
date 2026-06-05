@@ -30,7 +30,7 @@ static const char *TAG = "MPU6050";
 
 /* Configuration Values */
 #define MPU6050_SAMPLERATE_1Khz 0x07    // - No recommended for FAT32 loggers
-#define MPU6050_SAMPLERATE_80hz 0x63    // - I think on FAT32 logging, this can 
+#define MPU6050_SAMPLERATE_80hz 0x0b    // - (83.33Hz) I think on FAT32 logging, this can 
                                         //   go up to 100hz
 #define MPU6050_LPF_260Hz       0x00    // - Recommended for high sampling rate (> 500hz)
 #define MPU6050_LPF_21Hz        0x04    // - Recommended for 80Hz sampling rate 

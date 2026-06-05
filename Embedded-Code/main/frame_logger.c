@@ -311,7 +311,6 @@ FILE *frame_logger_get_file(void)
 #define SECTOR_SIZE     8192    // 8 blocks of SD card (512 bytes each).
                             
 struct LoggerBuffer {
-    portMUX_TYPE guard;     // Legacy
     SemaphoreHandle_t ready;
     SemaphoreHandle_t lock;
     volatile uint8_t bufA[SECTOR_SIZE];
@@ -322,8 +321,7 @@ struct LoggerBuffer {
 };
 
 LoggerBuffer *logger_buff_init(void) {
-    static LoggerBuffer buf;
-    portMUX_INITIALIZE(&buf.guard); // TODO: Remove
+    DRAM_ATTR static LoggerBuffer buf;
     buf.ready = xSemaphoreCreateBinary();
     buf.lock = xSemaphoreCreateMutex();
     buf.active_fill_buffer = buf.bufA;
@@ -341,7 +339,7 @@ write_to_ring_buffer(
     uint16_t payload_size
 ) 
 {
-    uint16_t total_sz = sizeof(frame_header_t) + payload_size;
+    uint16_t total_sz = sizeof(frame_header_t) + payload_size + 2;
     uint8_t *my_write_pointer = NULL;
     uint16_t crc = 0xFFFF;
     frame_header_t header;
@@ -377,12 +375,15 @@ write_to_ring_buffer(
 
     my_write_pointer = (uint8_t *)(buf->active_fill_buffer + buf->fill_index);
     buf->fill_index += total_sz;
-    xSemaphoreGive(buf->lock);
     // taskEXIT_CRITICAL(&buffer_guard); // Legacy
 
     memcpy(my_write_pointer, &header, sizeof(header));
     my_write_pointer += sizeof(header);
     memcpy(my_write_pointer, payload, payload_size);
+    my_write_pointer += payload_size;
+    memcpy(my_write_pointer, &crc, 2);
+
+    xSemaphoreGive(buf->lock);
 }
 
 esp_err_t logging_init(int *fd, char *filename) {
