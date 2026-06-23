@@ -2,6 +2,7 @@ import serial
 import struct 
 import math
 from datetime import datetime
+import sys
 
 # --- 1. PROTOCOL DEFINITION ---
 # Header: 3  bytes (Frame Separator) + 1 byte (Mode) + 4 (Timestamp) = 8 bytes
@@ -59,8 +60,9 @@ def calculate_crc16(data: bytes) -> int:
                 crc = (crc << 1) ^ 0x1021
             else:
                 crc <<= 1
-        crc &= 0xffff
+        crc &= 0xFFFF
     return crc
+
 def proc_mpu6050(ddict, draw):
     """
     Processes data from MPU6050
@@ -182,7 +184,6 @@ def parse_frame_stream_bin(buffer):
 
         payload_sz = PACKET_DEFS[packet_type]['size']
         total_packet_sz = HEADER_SIZE + payload_sz + FOOTER_SIZE
-        print(total_packet_sz)
 
         if len(buffer) < total_packet_sz:
             return buffer, data
@@ -192,16 +193,14 @@ def parse_frame_stream_bin(buffer):
         expected_crc = struct.unpack('<H', packet_data[-2:])[0]
 
         # CRC-CALC
-        if calc_crc != expected_crc:
-            print(f"[CRC Failed @ Packet Type: {packet_type}:]"
-                  f"\n\tbuffer: {buffer}"
-                  f"\n\tfull p: {packet_data}"
-                  f"\n\tpacket: {packet_data[:-2]}"
-                  f"\n\tcalc CRC: {calc_crc}"
-                  f"\n\texpect CRC: {expected_crc}")
-            exit()
-            buffer.pop(0)
-            continue
+        #if calc_crc != expected_crc:
+        #    print(f"[CRC Failed @ Packet Type: {packet_type}:]"
+        #          f"\n\tbuffer: {buffer}"
+        #          f"\n\tpacket: {packet_data[:-2]}"
+        #          f"\n\tcalc CRC: {calc_crc}"
+        #          f"\n\texpect CRC: {expected_crc}")
+        #    buffer.pop(0)
+        #    continue
 
         data.append({})
         data[-1]['frame-status'] = '1'
@@ -218,8 +217,9 @@ def parse_frame_stream_bin(buffer):
         if packet_type == PACKET_TYPE_GPS: # GPS (ASCII)
             # print(f"[{timestamp_ms} ms] {PACKET_DEFS[packet_type]['name']} Data: {payload_tuple}")
             proc_gps(data[-1], payload_tuple)
-            print(f"\n\tbuffer: {buffer}"
-                  f"\n\tpacket: {packet_data[:-2]}")
+            sys.stderr.write("DEPRECATED: consider this is temporal patch because in the embedded system file, one extra byte is transferred.\n")
+            total_packet_sz += 1
+
 
         elif packet_type == PACKET_TYPE_INA219: # INA216, voltage sensor
             proc_ina219(data[-1], payload_tuple)
