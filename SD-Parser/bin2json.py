@@ -2,11 +2,13 @@ import frameparser
 import argparse
 import json
 
+MAX_READ_SZ = 160
+
 def hardware_handler(src_stream_port, output_file):
-    armed_file = None
+    dst_file = None
 
     try:
-        src_stream = open(src_stream_port, "rb")
+        src = open(src_stream_port, "rb")
 
     except:
         print(f"Stream type {src_stream_port} not supported.")
@@ -17,19 +19,19 @@ def hardware_handler(src_stream_port, output_file):
 
     while True:
       try:
-        available = src_stream.read(28)
-        if available is None:
+        available = src.read(MAX_READ_SZ)
+        if len(available) == 0:
             break
 
-        if armed_file is not None:
-            armed_file.write(available)
+        if dst_file is not None:
+            dst_file.write(available)
 
         available = remainder + available
         remainder, new_data = frameparser.parse_frame_stream_bin(available)
-        for packet in new_data:
+        #for packet in new_data:
             # TODO: create json
-            if "pitch" in new_data[0]:
-                print(new_data[0]['sys-timestamp_ms'], new_data[0]['acceleration'])
+            #if "pitch" in new_data[0]:
+            #    print(new_data[0]['sys-timestamp_ms'], new_data[0]['acceleration'])
             #if "shunt_mVolts" in packet:
             #    print(packet['sys-timestamp_ms'], packet['shunt_mVolts'])
             #if "gpsLock" in new_data[0]:
@@ -42,9 +44,9 @@ def hardware_handler(src_stream_port, output_file):
         continue
 
     print("Closing files...")
-    src_stream.close()
-    if armed_file is not None:
-        armed_file.close()
+    src.close()
+    if dst_file is not None:
+        dst_file.close()
 
 #-- User Input --#
 args = argparse.ArgumentParser()
