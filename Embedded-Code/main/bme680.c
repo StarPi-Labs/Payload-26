@@ -22,12 +22,29 @@ static const char *TAG = "bme680";
 #define BME680_ADDR         0x76
 #define REG_CHIP_ID         0xD0    /* Expected: 0x61 */
 #define VAL_CHIP_ID         0x61
-#define REG_CTRL_HUM        0xF2
-#define REG_CTRL_MEAS       0xF4
+#define REG_CTRL_HUM        0x72
+#define REG_CTRL_MEAS       0x74
+#define REG_CTRL_GAS_1      0x71
 #define REG_CONFIG          0xF5
 #define REG_DATA_START      0xF7    /* 8 bytes: press(3) + temp(3) + hum(2) */
 
+/* BME680 Configuration */
+#define HUM_SAMPLINGx1      0x01
+#define TEMP_SAMPLINGx1     0x20
+#define PRES_SAMPLINGx1     0x04
+#define FORCE_MODE          0x01
+#define TRIGGER_MEASURE     (TEMP_SAMPLINGx1 | PRES_SAMPLINGx1 | FORCE_MODE)
+#define FILTER_OFF          0x00
+#define MEASURE_DURATION_MS 10      // This varies based on the oversampling configuration
+                                    // Read the datasheet for further explanation.
+
 #define BME680_DATA_LEN     8       /* TODO: check data length for BME680 */
+
+/* Configuration */
+#define DISABLE_GAS         0x00
+#define OSRS_TEM_PRES       0b00100100
+#define OSRS_HUM            0b00000001
+#define FILTER_OFF          0x00
 
 static i2c_master_dev_handle_t s_dev = NULL;
 /* ── Public API ───────────────────────────────────────────── */
@@ -63,25 +80,60 @@ esp_err_t bme680_config(void)
 {
     /* TODO: Check this configuration for BME680 */
     /* Humidity oversampling ×1 (must be set before ctrl_meas) */
-    ret = i2c_bus_write_byte(s_dev, REG_CTRL_HUM, 0x01);
-    if (ret != ESP_OK) return ret;
+    ret = i2c_bus_write_byte(s_dev, REG_CTRL_HUM, HUM_SAMPLINGx1);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed Humidity sampling rate.");
+        return ret;
+    }
 
-    /* Normal mode, temp oversample ×1, press oversample ×1 */
-    ret = i2c_bus_write_byte(s_dev, REG_CTRL_MEAS, 0x27);
-    if (ret != ESP_OK) return ret;
+    /* temp oversample ×1, press oversample ×1, Forced mode*/
+    ret = i2c_bus_write_byte(s_dev, REG_CTRL_MEAS, TRIGGER_MEASURE);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to set temp and pressure sample modes.");
+        return ret;
+    }
 
     /* Standby 0.5 ms, filter off */
-    ret = i2c_bus_write_byte(s_dev, REG_CONFIG, 0x00);
-    if (ret != ESP_OK) return ret;
+    ret = i2c_bus_write_byte(s_dev, REG_CONFIG, FILTER_OFF);
+    if (ret != ESP_OK) {
+        return ret;
+    }
 
-    ESP_LOGI(TAG, "BME680 initialised (normal mode, 1× oversampling)");
     return ESP_OK;
 }
 
-esp_err_t bme680_read(uint8_t *out_data)
-{
-    return i2c_bus_read_bytes(s_dev, REG_DATA_START, out_data, BME680_DATA_LEN);
+/* read BME680 in fsm */
+esp_err_t read_bme680(uint8_t *out_data, uint8_t attempts) {
+    esp_err_t ret;
+    ret = i2c_bus_write_byte(s_dev, REG_CTRL_MEAS, TRIGGER_MEASURE);
+
+    if (ret != ESP_OK) {
+        attempts++;
+        return attempts;
+    }
+
+    vTaskDelay(pdMS_TO_TICKS(10));
+
+    ret = i2c_bus_read_bytes(s_dev, REG_DATA_START, out_data, BME680_DATA_LEN);
+    if (ret != ESP_OK) {
+        attempts++;
+        return attempts;
+    }
+    return 0;
 }
+
+void bme680_task (void *arg) {
+    uint8_t attempts = 0;
+    struct TaskParams *tparams (struct TaskParams *) arg;
+    TickType_t xLastWakeTime = xTaskGetTickCount();
+    
+    while(1) {
+        attempts = read_bme680() {
+        }
+    }
+}
+
+
 
 const sensor_driver_t bme680_driver = {
     .name     = "BME680",
