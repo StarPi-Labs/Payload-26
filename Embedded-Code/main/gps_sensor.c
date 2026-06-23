@@ -126,7 +126,7 @@ void gps_rx_task(void *arg) {
                     tparams->log_buffer,
                     SBIT_MQ10, 
                     (void *)&gps_info, 
-                    sizeof(struct GPSInfo)
+                    sizeof(struct GPSInfo) - 1
                 );
                 break;
             }
