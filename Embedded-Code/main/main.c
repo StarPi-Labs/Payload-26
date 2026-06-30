@@ -23,11 +23,13 @@
 #include "freertos/task.h"
 #include "freertos/semphr.h"
 #include "esp_log.h"
+#include "driver/gpio.h"
 
 #include "sdkconfig.h"
 #include "sensor_config.h"
 #include "systemp2i.h"
 #include "health_monitoring.h"
+#include "flight_stats.h"
 
 /* ── Conditionally include sensor drivers ─────────────────── */
 #if CONFIG_ENABLE_I2C_BUS
@@ -85,6 +87,8 @@ void hm_start_task(System *sys) {
     // TODO: sys->tasks.hm = &hm_handler;
 
 }
+
+#if CONFIG_ENABLE_GPS
 void gps_start_task(System *sys) {
     static TaskHandle_t gps_handler = NULL; 
     static struct TaskParams gps_params;
@@ -105,7 +109,9 @@ void gps_start_task(System *sys) {
     // TODO: link this taks to system
     // sys->tasks.gps = &gps_handler;
 }
+#endif /* CONFIG_ENABLE_GPS */
 
+#if CONFIG_ENABLE_INA219
 void ina219_start_task(System *sys) {
     static TaskHandle_t ina219_handler = NULL;
     static struct TaskParams ina219_params;
@@ -127,7 +133,29 @@ void ina219_start_task(System *sys) {
     // TODO: link this task to the system:
     // sys->tasks.ina216 = ina219_handler;
 }
+#endif /* CONFIG_ENABLE_INA219 */
 
+#if CONFIG_ENABLE_BME680
+void bme680_start_task(System *sys) {
+    static TaskHandle_t bme_handle = NULL;
+    static struct TaskParams bme_params;
+    bme_params.hm_buffer  = sys->hm_buffer;
+    bme_params.log_buffer = sys->log_buffer;
+    bme_params.context    = &sys->context;
+    bme_params.args       = NULL;
+
+    xTaskCreatePinnedToCore(
+        bme680_task,
+        "bme680_task",
+        4096,
+        (void *)&bme_params,
+        BME680_PRIORITY,
+        &bme_handle,
+        BME680_CORE);
+}
+#endif /* CONFIG_ENABLE_BME680 */
+
+#if CONFIG_ENABLE_MPU6050
 void mpu6050_start_task(System *sys) {
     static TaskHandle_t mpu6050_handle = NULL;
     static struct TaskParams tparams;
@@ -148,6 +176,7 @@ void mpu6050_start_task(System *sys) {
 
     mpu6050_start_isr(&mpu6050_handle);
 }
+#endif /* CONFIG_ENABLE_MPU6050 */
 
 #include "esp_timer.h" // For microsecond-accurate timing
 #include <fcntl.h>
@@ -303,7 +332,11 @@ void sysP2I_init(System *sys) {
         vTaskDelay(pdMS_TO_TICKS(500)); // Compulsory attached to BLT initialization, 
                                         // otherwise RF might affect measurments.
     } else {
-        esp_log_level_set("*", ESP_LOG_NONE);   /* Kill logs, no need if we are 
+        /* BENCH TEST: log-kill disabled so serial works on USB resets. On the S3,
+         * flashing/monitoring triggers USB_UART_CHIP_RESET (not ESP_RST_POWERON),
+         * which would otherwise silence every log below. Restore the
+         * esp_log_level_set("*", ESP_LOG_NONE) call for flight. */
+        /* Kill logs, no need if we are
                                                  * in flight. 
                                                  * TODO: this needs to be improved:
                                                  * - kill if we are above boost mode
@@ -371,17 +404,20 @@ void sysP2I_POST(System *sys){
     sys->hm_buffer = hm_buff_init();
     hm_start_task(sys);
     
+#if CONFIG_ENABLE_MPU6050
     if (sys->health & (1 << I2C0_HEALTH)) {
         if (ESP_OK == mpu6050_init(sys->port.mpu6050)) {
             sys->health |= (1 << MPU6050_HEALTH);
             mpu6050_start_task(sys);
         }
     }
+#endif
 
     if (sys->health & (1 << I2C1_HEALTH)) {
 #if CONFIG_ENABLE_BME680
         if (ESP_OK == bme680_init(sys->port.bme_ina)) {
             sys->health |= (1 << BME680_HEALTH);
+            bme680_start_task(sys);
         }
 #endif
 
@@ -395,22 +431,13 @@ void sysP2I_POST(System *sys){
 
 #if CONFIG_ENABLE_GPS
     if (sys->health & (1 << GPS_UART_HEALTH)) {
+        /* This SAM-M10Q board runs at 9600 baud (GPS_BAUD); no baud upgrade. */
         if (ESP_OK == gps_probe(GPS_UART)) {
-            ESP_LOGI(TAG, "GPS found at 9600, upgrading...");
-            gps_upgrade_baud_115200(GPS_UART);
-        }
-        if (ESP_OK == sys_uart_baud(GPS_UART, GPS_UART_BAUD115200)) {
-            sys_uart_flush(GPS_UART);
-            if (ESP_OK == gps_probe(GPS_UART)) {
-                sys->health |= (1 << GPS_HEALTH);
-                gps_disable_non_essential_NMEA(GPS_UART);
-                gps_start_task(sys);
-            } else {
-                ESP_LOGE(TAG, "GPS probe failed at 115200.");
-            }
+            sys->health |= (1 << GPS_HEALTH);
+            gps_disable_non_essential_NMEA(GPS_UART);
+            gps_start_task(sys);
         } else {
-            ESP_LOGE(TAG, "Couldn't upgrade ESP's for GPS.");
-            sys->health &= ~(1 << GPS_UART_HEALTH);
+            ESP_LOGE(TAG, "GPS probe failed at %d baud.", GPS_BAUD);
         }
     }
 #endif
@@ -464,12 +491,39 @@ void app_main(void)
     }
 
 
-    sys.context.mode = MODE_BOOST;
+    /* Live rate monitor: logs achieved samples/sec per sensor once a second. */
+    xTaskCreatePinnedToCore(flight_stats_task, "rates", 3072,
+                            (void *)&sys.context, 1, NULL, 0);
 
-    /* ── 6. Heartbeat / watchdog loop ────────────────────── */
+    sys.context.mode = MODE_ARMED;   /* BENCH TEST: ARMED routes sensors to the
+                                      * debug/telemetry path (serial logs) instead of
+                                      * the SD ring buffer. Set back to MODE_BOOST (or
+                                      * wire the state machine) before flight. */
+
+    /* ── 6. BENCH TEST: cycle flight mode with the BOOT button (GPIO0) ───────
+     * Each press advances ARMED -> BOOST -> COAST -> ARMED. Sensors re-key their
+     * behaviour live (e.g. the BME680 enables its gas channel in COAST). If your
+     * board has no BOOT button, briefly tap GPIO0 to GND. Remove for flight —
+     * context.mode will be driven by the launch-detection state machine. */
+    gpio_set_direction(GPIO_NUM_0, GPIO_MODE_INPUT);
+    gpio_set_pull_mode(GPIO_NUM_0, GPIO_PULLUP_ONLY);
+
+    const uint32_t test_modes[] = { MODE_ARMED, MODE_BOOST, MODE_COAST };
+    const char    *mode_name[]  = { "ARMED", "BOOST", "COAST" };
+    int idx = 0;
+    sys.context.mode = test_modes[idx];
+    ESP_LOGW("TEST", "BOOT button cycles mode: ARMED -> BOOST -> COAST (now ARMED)");
+
+    int prev_level = 1;
     while (1) {
-        vTaskDelay(pdMS_TO_TICKS(5000));
+        int level = gpio_get_level(GPIO_NUM_0);
+        if (prev_level == 1 && level == 0) {        /* falling edge = press */
+            idx = (idx + 1) % 3;
+            sys.context.mode = test_modes[idx];
+            ESP_LOGW("TEST", "mode -> %s", mode_name[idx]);
+            vTaskDelay(pdMS_TO_TICKS(250));         /* debounce */
+        }
+        prev_level = level;
+        vTaskDelay(pdMS_TO_TICKS(20));
     }
-
-    while(1);
 }

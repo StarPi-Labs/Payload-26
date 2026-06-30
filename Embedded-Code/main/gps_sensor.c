@@ -16,6 +16,7 @@
 #include "freertos/task.h"
 #include "frame_logger.h"
 #include "health_monitoring.h"
+#include "flight_stats.h"
 #include "nmea.h"
 
 #include <string.h>
@@ -87,25 +88,22 @@ void gps_rx_task(void *arg) {
         }
 
         if (gps_info.available == NMEA_READY_INFO) {
+            flight_stats_tick(STAT_GPS);
             /* TODO: After parsed, this task should sleep for a second. */
             switch(tparams->context->mode) {
             case MODE_POST:
             case MODE_ARMED:
-                // This for debugging only
-                /*
-                ESP_LOGI(TAG,"Status %c, speed %s, course %s, time %s, lat %s %c, lon %s %c, sats %s, alt %s", \
-                    gps_info.status, \
-                    gps_info.speed, \
-                    gps_info.course, \
-                    gps_info.time, \
-                    gps_info.lat, \
-                    gps_info.lat_orientation, \
-                    gps_info.lon, \
-                    gps_info.lon_orientation, \
-                    gps_info.sat_count, \
-                    gps_info.alt
-                    );
-                */
+                ESP_LOGI(TAG, "status=%c speed=%s course=%s time=%s lat=%s%c lon=%s%c sats=%s alt=%s",
+                    gps_info.status,
+                    gps_info.speed,
+                    gps_info.course,
+                    gps_info.time,
+                    gps_info.lat,
+                    gps_info.lat_orientation,
+                    gps_info.lon,
+                    gps_info.lon_orientation,
+                    gps_info.sat_count,
+                    gps_info.alt);
 
                 telemetry_counter++;
                 if (telemetry_counter >= GPS_HM_SKIP_SAMPLES) {
@@ -136,7 +134,8 @@ void gps_rx_task(void *arg) {
     }
 
     // if GPS dead
-    while(1);
+    ESP_LOGE(TAG, "GPS stopped after repeated read failures");
+    vTaskDelete(NULL);
 }
 
 /* ── Public API ───────────────────────────────────────────── */

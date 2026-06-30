@@ -194,6 +194,12 @@ void bt_serial_write_byte(uint8_t byte)
     (void)byte;
 }
 
+void bt_serial_write_chunk(uint8_t *data, uint16_t len)
+{
+    (void)data;
+    (void)len;
+}
+
 bool bt_serial_has_client(void)
 {
     return false;

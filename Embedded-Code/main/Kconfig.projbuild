@@ -103,12 +103,12 @@ menu "Star-PI Payload Configuration"
 
     config GPS_TXD_PIN
         int "GPS TX GPIO (ESP → GPS)"
-        default 32
+        default 6
         depends on ENABLE_GPS
 
     config GPS_RXD_PIN
         int "GPS RX GPIO (GPS → ESP)"
-        default 35
+        default 7
         depends on ENABLE_GPS
     
     comment "GPS set 115200 as baud"

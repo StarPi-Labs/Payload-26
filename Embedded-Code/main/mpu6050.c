@@ -11,6 +11,7 @@
 #include "i2c_bus.h"
 #include "esp_log.h"
 #include "systemp2i.h"
+#include "flight_stats.h"
 #include "driver/gpio.h"
 
 static const char *TAG = "MPU6050";
@@ -26,7 +27,9 @@ static const char *TAG = "MPU6050";
 #define REG_ACCEL_XOUT_H        0x3B   /* Start of 14-byte burst read */
 #define REG_PWR_MGMT_1          0x6B
 #define REG_WHO_AM_I            0x75
-#define VAL_WHO_AM_I            0x68
+#define VAL_WHO_AM_I            0x68    /* MPU6050 */
+#define VAL_WHO_AM_I_MPU6500    0x70    /* MPU6500 — common substitute on "MPU6050" boards */
+#define VAL_WHO_AM_I_MPU9250    0x71    /* MPU9250 */
 
 /* Configuration Values */
 #define MPU6050_SAMPLERATE_1Khz 0x07    // - No recommended for FAT32 loggers
@@ -134,11 +137,16 @@ esp_err_t mpu6050_init(i2c_master_bus_handle_t bus) {
         return ret;
     }
 
-    /* Is it the right sensor? */
-    if (sensor_id != VAL_WHO_AM_I) {
-        ESP_LOGE(TAG, "Wrong Sensor: Expected 0x%02X, got 0x%02X", VAL_WHO_AM_I, sensor_id);
+    /* Is it a compatible IMU?  Many "MPU6050" boards actually carry an MPU6500
+     * (0x70) or MPU9250 (0x71); they share the accel/gyro register map, so the
+     * existing configuration works for all of them. */
+    if (sensor_id != VAL_WHO_AM_I &&
+        sensor_id != VAL_WHO_AM_I_MPU6500 &&
+        sensor_id != VAL_WHO_AM_I_MPU9250) {
+        ESP_LOGE(TAG, "Wrong Sensor: got 0x%02X (expected 0x68/0x70/0x71)", sensor_id);
         return ESP_ERR_INVALID_RESPONSE;
     }
+    ESP_LOGI(TAG, "IMU online, WHO_AM_I = 0x%02X", sensor_id);
 
     mpu6050_config();
     
@@ -196,6 +204,7 @@ void mpu6050_task(void *arg) {
     esp_err_t ret;
     uint8_t attempts = 0;
     uint16_t telemetry_counter = 0;
+    uint32_t last_mode = 0xFFFFFFFFu;   /* force accel-range config on first sample */
 
     while(1) {
         xTaskNotifyStateClear(NULL);
@@ -217,17 +226,32 @@ void mpu6050_task(void *arg) {
             attempts = 0;
         }
 
+        flight_stats_tick(STAT_MPU6050);
         mpu6050_raw2int(mpu_info, mpu_raw);
 
-        switch(tparams->context->mode) {
+        /* Accelerometer range follows the flight mode: +/-16g during BOOST (high
+         * launch loads), +/-2g in every other phase (fine resolution). Written
+         * only on a mode transition. NOTE: post-processing must apply the matching
+         * sensitivity (2048 LSB/g at +/-16g, 16384 LSB/g at +/-2g) per phase. */
+        uint32_t mode = tparams->context->mode;
+        if (mode != last_mode) {
+            uint8_t accel_cfg = (mode == MODE_BOOST) ? MPU6050_ACCEL_16g : MPU6050_ACCEL_2g;
+            if (i2c_bus_write_byte(s_dev, REG_ACCEL_CONFIG, accel_cfg) == ESP_OK) {
+                ESP_LOGI(TAG, "accel range -> %s",
+                         (accel_cfg == MPU6050_ACCEL_16g) ? "+/-16g" : "+/-2g");
+            }
+            last_mode = mode;
+        }
+
+        switch(mode) {
         case MODE_POST:
         case MODE_ARMED:
             telemetry_counter++;
             if (telemetry_counter >= MPU6050_HM_SKIP_SAMPLES) {
                 telemetry_counter = 0;
-                // DEBUGGING ONLY {
-                // ESP_LOGI(TAG, "%d %d %d %d %d %d %d\n", mpu_info[0], mpu_info[1], mpu_info[2], mpu_info[3], mpu_info[4], mpu_info[5], mpu_info[6]);
-                // }
+                ESP_LOGI(TAG, "ax=%d ay=%d az=%d temp=%d gx=%d gy=%d gz=%d",
+                         mpu_info[0], mpu_info[1], mpu_info[2], mpu_info[3],
+                         mpu_info[4], mpu_info[5], mpu_info[6]);
  
                 hm_send(
                     tparams->hm_buffer,
@@ -244,10 +268,6 @@ void mpu6050_task(void *arg) {
                 SBIT_MPU6050,
                 (uint8_t *)mpu_info,
                 MPU6050_DATA_LEN);
-            // TODO: Check when acceleration is below 2g to change mpu dynamic range
-            // if (longitudinal_ACCEL < 1.5g) {
-            // sp_err_t ret = i2c_bus_write_byte(s_dev, REG_ACCEL_CONFIG, MPU6050_ACCEL_2g);
-            // }
             break;
 
         case MODE_COAST:

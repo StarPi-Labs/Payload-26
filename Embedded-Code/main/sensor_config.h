@@ -29,7 +29,7 @@
 #define MPU6050_I2C             I2C_NUM_0
 #define MPU6050_SDA             CONFIG_I2C0_MASTER_SDA
 #define MPU6050_SCL             CONFIG_I2C0_MASTER_SCL
-#define MPU6050_INT_PIN         34
+#define MPU6050_INT_PIN         4       // S3-N8R8: GPIO34 is octal-PSRAM; use a free GPIO
 #define MPU6050_CORE            1
 #define MPU6050_PRIORITY        5                       // Highest Priority
 #define MPU6050_HM_SKIP_SAMPLES 4
@@ -41,6 +41,15 @@
 #define INA219_CORE             1
 #define BME680_CORE             1
 #define BME680_PRIORITY         4                       // Medium Priority
+#define BME680_ADDR_LOW         0x76                     // SDO low (generic GY-680)
+#define BME680_ADDR_HIGH        0x77                     // SDO high (Adafruit)
+#define BME680_CHIP_ID          0x61                     // BME680 / BME688
+#define BME680_PERIOD_PAD_MS    100                      // ~10Hz on the pad (POST/ARMED)
+#define BME680_PERIOD_FLIGHT_MS 20                       // ~50Hz T/P/H in BOOST/COAST
+#define BME680_GAS_INTERVAL_MS  1000                     // gas measurement cadence in COAST
+#define BME680_HM_SKIP_SAMPLES  5                        // telemetry throttle (POST/ARMED)
+#define BME680_HEATER_TEMP_C    320                      // gas heater target (deg C)
+#define BME680_HEATER_AMB_C     25                       // assumed ambient for heater calc
 #define INA219_PRIORITY         3                       // Lowest Priority
 #define INA219_PERIOD_1ms       1                       // 1000Hz, max: 1.8kHz, period 532us
 #define INA219_PERIOD_2ms       2                       // 500Hz    

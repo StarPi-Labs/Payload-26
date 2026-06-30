@@ -81,7 +81,6 @@ hm_send(
     xSemaphoreGive(buf->ready);
 }
 
-#include "esp_rom_uart.h"   // debugging
 #define BT_TX_CHUNK_SIZE        128
 /*
  * This is a loosy/forgiven task. Missing a sample or some is acceptable. However,

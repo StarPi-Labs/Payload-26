@@ -8,8 +8,8 @@ if(CONFIG_ENABLE_MPU6050)
     list(APPEND srcs "mpu6050.c")
 endif()
 
-if(CONFIG_ENABLE_BME280)
-    list(APPEND srcs "bme280.c")
+if(CONFIG_ENABLE_BME680)
+    list(APPEND srcs "bme680.c")
 endif()
 
 if(CONFIG_ENABLE_INA219)
@@ -22,7 +22,7 @@ endif()
 
 # Frame logger is always compiled (frame building types needed)
 # SD card functions are no-ops when SD is disabled
-list(APPEND srcs "frame_logger.c" "health_monitoring.c" "bt_serial_bridge.c" "sdif.c")
+list(APPEND srcs "frame_logger.c" "health_monitoring.c" "bt_serial_bridge.c" "sdif.c" "flight_stats.c")
 
 idf_component_register(
     SRCS ${srcs}

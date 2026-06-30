@@ -21,6 +21,7 @@
 #include "freertos/task.h"
 
 #include "systemp2i.h"
+#include "flight_stats.h"
 
 static const char *TAG = "ina219";
 
@@ -103,8 +104,8 @@ esp_err_t ina219_init(i2c_master_bus_handle_t bus) {
     esp_err_t ret = i2c_bind(bus, &s_dev, INA219_ADDR);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to add INA219: %s", esp_err_to_name(ret));
+        return ret;
     }
-    return ret;
 
     /**
      * Funny thing, this device doesn't have an any id register
@@ -198,6 +199,8 @@ void IRAM_ATTR ina219_task(void *arg) {
             break;
         }
 
+        flight_stats_tick(STAT_INA219);
+
         ina219_info.shunt_voltage = (int16_t)((shunt_volt[0] << 8) | shunt_volt[1]);
         ina219_info.bus_voltage   = (int16_t)((bus_volt[0] << 8) | bus_volt[1]);
         ina219_info.bus_voltage   = ina219_info.bus_voltage >> 3;
@@ -207,7 +210,10 @@ void IRAM_ATTR ina219_task(void *arg) {
         case MODE_ARMED:
             telemetry_counter++;
             if (telemetry_counter >= INA219_HM_SKIP_SAMPLES) {
-                // ESP_LOGI(TAG, "Vs = %d, Vb = %d", ina219_info.values.shunt_voltage, ina219_info.values.bus_voltage);
+                ESP_LOGI(TAG, "I=%.1f mA  Vbus=%.3f V  (shunt_raw=%d)",
+                         ina219_info.shunt_voltage * 0.1f,   /* 10uV/LSB over 0.1ohm = 0.1mA/LSB */
+                         ina219_info.bus_voltage * 0.004f,   /* 4mV/LSB (already >>3) */
+                         ina219_info.shunt_voltage);
                 hm_send(
                     tparams->hm_buffer,
                     SBIT_INA219,
@@ -232,6 +238,9 @@ void IRAM_ATTR ina219_task(void *arg) {
         memset(&ina219_info, 0, sizeof(struct INA219Info));
         vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(INA219_PERIOD_default));
     }
+
+    ESP_LOGE(TAG, "INA219 stopped after repeated read failures");
+    vTaskDelete(NULL);
 }
 
 esp_err_t ina219_config(void)
