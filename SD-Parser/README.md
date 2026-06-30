@@ -8,10 +8,39 @@
 |MPU6050 | ready |
 |BME680 | ongoing... |
 
-0. Sometimes this is the only thing you want to run:
+## Formating from binary to json
+
+NOTE: The json file is over 10x larger than the binary file, for example: a 52M file can easily translate translate into more than 600MB.
+
 ```
 python3 bin2json.py --source <path/to/bin/file> --output <path/to/json/file>
 ```
+
+The json file is just the direct translation of the python dictionary in `vanilla-websocket.py`, variable `SCHEMA`:
+
+``` json
+[
+  {
+    "frame-status": "1", 
+     "sys-timestamp-ms": 23378, 
+     <sensor 0 information: ....>"
+  }, 
+  {
+    "frame-status": "1",
+    "sys-timestamp-ms": 24378,
+    <sensor 1 information: ...>"
+  },
+  {
+    ...
+  },
+  {}
+]
+```
+
+
+
+
+## Running for health monitoring
 
 1. (Ubuntu based) Run from file
 ``` bash

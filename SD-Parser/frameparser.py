@@ -2,6 +2,7 @@ import serial
 import struct 
 import math
 from datetime import datetime
+import sys
 
 # --- 1. PROTOCOL DEFINITION ---
 # Header: 3  bytes (Frame Separator) + 1 byte (Mode) + 4 (Timestamp) = 8 bytes
@@ -17,7 +18,7 @@ INA219_SHUNT_OMH= 0.1
 # PACKET TYPES:
 PACKET_TYPE_MPU6050  = 0x01
 PACKET_TYPE_BME680   = 0x02
-PACKET_TYPE_MQ10     = 0x04
+PACKET_TYPE_GPS      = 0x04
 PACKET_TYPE_INA219   = 0x08
 PACKET_TYPE_SYSSTATE = 0x10
 PACKET_TYPE_RESERV0  = 0x20
@@ -38,7 +39,7 @@ NOTE:
 PACKET_DEFS = {
     PACKET_TYPE_MPU6050:  {'name': 'MPU6050',   'fmt': '<7h', 'size': 14},
     PACKET_TYPE_BME680:   {'name': 'BME680',    'fmt': '<3f', 'size': 12},
-    PACKET_TYPE_MQ10:     {'name': 'MQ10',      'fmt': '<c10s10s10s11sc12sc4s8s', 'size': 68}, 
+    PACKET_TYPE_GPS:      {'name': 'MQ10',      'fmt': '<c10s10s10s11sc12sc4s8s', 'size': 68}, 
     PACKET_TYPE_INA219:   {'name': 'INA219',    'fmt': '<2h', 'size': 4},
     PACKET_TYPE_SYSSTATE: {'name': 'SYSSTATE',  'fmt': '<d', 'size': 1}, # TODO: size? check it on the code
     PACKET_TYPE_RESERV0:  {'name': 'RESERVED0', 'fmt': '<3f', 'size': 1}, # Reserved for future sensors
@@ -51,8 +52,16 @@ mpu6050_accel_sensitivity = 2048.0
 mpu6050_gyro_sensitivity = 65.5
 
 def calculate_crc16(data: bytes) -> int:
-    # TODO: implement this heheh
-    return 0xFFFF
+    crc = 0xFFFF                        # Initialization Vector is the same in the embedded platform
+    for d in data:
+        crc = crc ^ (d << 8)
+        for i in range(8):
+            if crc & 0x8000:
+                crc = (crc << 1) ^ 0x1021
+            else:
+                crc <<= 1
+        crc &= 0xFFFF
+    return crc
 
 def proc_mpu6050(ddict, draw):
     """
@@ -169,7 +178,7 @@ def parse_frame_stream_bin(buffer):
         packet_type = buffer[3]
 
         if packet_type not in PACKET_DEFS:
-            print(buffer, packet_type)
+            print(f"Packet Type: {packet_type} | buf: {buffer}")
             buffer.pop(0)
             continue 
 
@@ -183,12 +192,15 @@ def parse_frame_stream_bin(buffer):
         calc_crc = calculate_crc16(packet_data[:-2])
         expected_crc = struct.unpack('<H', packet_data[-2:])[0]
 
-        """ # TODO: CRC-CALC
-        if calc_crc != expected_crc:
-            print("CRC Failed")
-            buffer.pop(0)
-            continue
-        """
+        # CRC-CALC
+        #if calc_crc != expected_crc:
+        #    print(f"[CRC Failed @ Packet Type: {packet_type}:]"
+        #          f"\n\tbuffer: {buffer}"
+        #          f"\n\tpacket: {packet_data[:-2]}"
+        #          f"\n\tcalc CRC: {calc_crc}"
+        #          f"\n\texpect CRC: {expected_crc}")
+        #    buffer.pop(0)
+        #    continue
 
         data.append({})
         data[-1]['frame-status'] = '1'
@@ -202,9 +214,12 @@ def parse_frame_stream_bin(buffer):
             payload_bytes
         )
         
-        if packet_type == PACKET_TYPE_MQ10: # GPS (ASCII)
+        if packet_type == PACKET_TYPE_GPS: # GPS (ASCII)
             # print(f"[{timestamp_ms} ms] {PACKET_DEFS[packet_type]['name']} Data: {payload_tuple}")
             proc_gps(data[-1], payload_tuple)
+            sys.stderr.write("DEPRECATED: consider this is temporal patch because in the embedded system file, one extra byte is transferred.\n")
+            total_packet_sz += 1
+
 
         elif packet_type == PACKET_TYPE_INA219: # INA216, voltage sensor
             proc_ina219(data[-1], payload_tuple)
