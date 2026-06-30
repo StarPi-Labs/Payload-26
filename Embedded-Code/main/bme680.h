@@ -1,11 +1,11 @@
 /**
  * @file bme680.h
- * @brief Bosch BME680 driver — raw logging + flight-mode-adaptive profiles.
+ * @brief Bosch BME680 driver — on-device compensation + flight-mode profiles.
  *
  * Sits on I2C1 (shared with the INA219). Auto-detects address 0x76/0x77 and
- * verifies chip id 0x61. Logs RAW sensor bytes; °C/hPa/%RH and gas Ω are
- * reconstructed in post-processing from the calibration blob the driver dumps
- * once at startup (over serial, and as a one-time SBIT_RESERVED0 log frame).
+ * verifies chip id 0x61. Applies the Bosch compensation on-device and logs
+ * SBIT_BME680 as 3 floats {temperature °C, pressure Pa, humidity %RH}; the gas
+ * resistance is logged separately as SBIT_GAS (1 float, ohm) in POST/ARMED/COAST.
  */
 
 #ifndef _BME680_H_
@@ -15,8 +15,8 @@
 #include <stdint.h>
 
 /**
- * Fixed-size raw sample (10 bytes) logged every measurement. Layout mirrors the
- * BME680 field-0 data registers so post-processing can apply Bosch compensation:
+ * Raw field-0 register read (10 bytes, internal). Compensated on-device before
+ * logging. Layout mirrors the BME680 field-0 data registers:
  *   press[3] = 0x1F..0x21 (press_msb, press_lsb, press_xlsb[7:4])
  *   temp[3]  = 0x22..0x24 (temp_msb,  temp_lsb,  temp_xlsb[7:4])
  *   hum[2]   = 0x25..0x26 (hum_msb,   hum_lsb)

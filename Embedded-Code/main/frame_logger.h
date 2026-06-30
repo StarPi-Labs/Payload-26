@@ -48,8 +48,8 @@
 #define SBIT_BME680     (1 << 1)    // Covers Temp, Hum, and Pressure.
 #define SBIT_MQ10       (1 << 2)    // GPS.
 #define SBIT_INA219     (1 << 3)    // Power and Current.
-#define SBIT_SYSSTATE   (1 << 4)    // Current System State.
-#define SBIT_RESERVED0  (1 << 5)    // Reserved
+#define SBIT_SYSSTATE   (1 << 4)    // Flight mode (1 byte), emitted on mode change.
+#define SBIT_GAS        (1 << 5)    // BME680 gas resistance (own frame, 1 float).
 #define SBIT_RESERVED1  (1 << 6)    // Reserved
 #define SBIT_RESERVED2  (1 << 7)    // Reserved
 

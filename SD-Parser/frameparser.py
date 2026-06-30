@@ -21,9 +21,17 @@ PACKET_TYPE_BME680   = 0x02
 PACKET_TYPE_GPS      = 0x04
 PACKET_TYPE_INA219   = 0x08
 PACKET_TYPE_SYSSTATE = 0x10
-PACKET_TYPE_RESERV0  = 0x20
+PACKET_TYPE_GAS      = 0x20    # BME680 gas resistance (own frame, 1 float)
 PACKET_TYPE_RESERV1  = 0x40
 PACKET_TYPE_RESERV2  = 0x80
+
+# Flight modes — must match the firmware enum (systemp2i.h)
+MODE_INIT, MODE_POST, MODE_SENSOR_CHECK, MODE_ARMED, MODE_BOOST, MODE_COAST = range(6)
+current_mode = MODE_ARMED      # updated by SYSSTATE frames
+
+# MPU accel scale is mode-dependent: +/-16g in BOOST, +/-2g in every other phase
+MPU_ACCEL_SENS_2G  = 16384.0   # LSB/g at +/-2g
+MPU_ACCEL_SENS_16G = 2048.0    # LSB/g at +/-16g
 
 """
 NOTE:
@@ -41,8 +49,8 @@ PACKET_DEFS = {
     PACKET_TYPE_BME680:   {'name': 'BME680',    'fmt': '<3f', 'size': 12},
     PACKET_TYPE_GPS:      {'name': 'MQ10',      'fmt': '<c10s10s10s11sc12sc4s8s', 'size': 68}, 
     PACKET_TYPE_INA219:   {'name': 'INA219',    'fmt': '<2h', 'size': 4},
-    PACKET_TYPE_SYSSTATE: {'name': 'SYSSTATE',  'fmt': '<d', 'size': 1}, # TODO: size? check it on the code
-    PACKET_TYPE_RESERV0:  {'name': 'RESERVED0', 'fmt': '<3f', 'size': 1}, # Reserved for future sensors
+    PACKET_TYPE_SYSSTATE: {'name': 'SYSSTATE',  'fmt': '<B', 'size': 1},  # flight mode (1 byte)
+    PACKET_TYPE_GAS:      {'name': 'GAS',       'fmt': '<f', 'size': 4},  # gas resistance [ohm]
     PACKET_TYPE_RESERV1:  {'name': 'RESERVED1', 'fmt': '<3f', 'size': 1}, # Reserved for future sensors
     PACKET_TYPE_RESERV2:  {'name': 'RESERVED2', 'fmt': '<3f', 'size': 1}, # Reserved for future sensors
 }
@@ -71,9 +79,10 @@ def proc_mpu6050(ddict, draw):
     - draw: data raw in binary
     """
 
-    ddict['accelerationX'] = draw[0] / mpu6050_accel_sensitivity
-    ddict['accelerationY'] = draw[1] / mpu6050_accel_sensitivity
-    ddict['accelerationZ'] = draw[2] / mpu6050_accel_sensitivity
+    accel_sens = MPU_ACCEL_SENS_16G if current_mode == MODE_BOOST else MPU_ACCEL_SENS_2G
+    ddict['accelerationX'] = draw[0] / accel_sens
+    ddict['accelerationY'] = draw[1] / accel_sens
+    ddict['accelerationZ'] = draw[2] / accel_sens
     ddict['acceleration'] = math.sqrt(ddict['accelerationX']**2 + ddict['accelerationY']**2 + ddict['accelerationZ']**2)
     ddict['imu_temp'] = draw[3] / 340 + 36.53
     ddict['roll'] = draw[4] / mpu6050_gyro_sensitivity
@@ -98,6 +107,22 @@ def proc_ina219(ddict, draw):
     ddict['bus_volts'] = draw[1] * INA219_MAX_VOLT / INA219_ADC_BITS
     ddict['current'] = ddict['shunt_mVolts'] / INA219_SHUNT_OMH
         
+def proc_bme680(ddict, draw):
+    """BME680 T/P/H: 3 compensated floats -> temperature [C], pressure [kPa], humidity [%RH]."""
+    ddict['temperature'] = draw[0]
+    ddict['pressure']    = draw[1] / 1000.0   # firmware sends Pa; dashboard wants kPa
+    ddict['humidity']    = draw[2]
+
+def proc_gas(ddict, draw):
+    """BME680 gas channel: 1 float -> gas resistance [ohm]."""
+    ddict['gas_resistance'] = draw[0]
+
+def proc_sysstate(ddict, draw):
+    """SYSSTATE: 1 byte = current flight mode. Tracked so the MPU accel scale is right."""
+    global current_mode
+    current_mode = draw[0]
+    ddict['mode'] = draw[0]
+
 def proc_gps(ddict, draw):
     """
     - ddict: dictionary to fill
@@ -227,6 +252,15 @@ def parse_frame_stream_bin(buffer):
         elif packet_type == PACKET_TYPE_MPU6050: # MPU6050, IMU sensor
             # print(f"[{timestamp_ms} ms] {PACKET_DEFS[packet_type]['name']} Data: {payload_tuple}")
             proc_mpu6050(data[-1], payload_tuple)
+
+        elif packet_type == PACKET_TYPE_BME680: # BME680 T/P/H (compensated)
+            proc_bme680(data[-1], payload_tuple)
+
+        elif packet_type == PACKET_TYPE_GAS: # BME680 gas resistance
+            proc_gas(data[-1], payload_tuple)
+
+        elif packet_type == PACKET_TYPE_SYSSTATE: # flight-mode marker
+            proc_sysstate(data[-1], payload_tuple)
 
         else:
            print(f"[{timestamp_ms} ms] {PACKET_DEFS[packet_type]['name']} Data: {payload_tuple}")

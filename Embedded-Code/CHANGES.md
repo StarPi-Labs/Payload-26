@@ -39,10 +39,11 @@ _First hardware bring-up of the ESP32-S3 board (June 2026)._
 - **GPS / SAM-M10Q** (`gps_sensor.c`, `main.c`): native **9600 baud**, removed the M8-only `UBX-CFG-PRT` baud-upgrade (unsupported on M10); task exits cleanly instead of a busy `while(1)`.
 
 ### New BME680 driver (`bme680.c` / `bme680.h`)
-- Replaces the old stub. Auto-detects `0x76`/`0x77`, verifies chip-id `0x61`, soft-resets, reads + dumps the 40-byte calibration blob, pre-computes the gas heater set-point.
-- **Raw logging** (offline compensation). Fixed **10-byte** payload: `press[3] temp[3] hum[2] gas[2]`.
-- **Mode-adaptive profiles:** PAD (POST/ARMED) ~10 Hz T/P/H, gas off · BOOST ~50 Hz T/P/H, IIR off, gas off · COAST ~50 Hz T/P/H **+ a gas measurement every ~1 s** (interleaved so altitude stays fast).
-- Forced-mode reads wait out the conversion (the gas heater needs ~100 ms) before reading.
+- Replaces the old stub. Auto-detects `0x76`/`0x77`, verifies chip-id `0x61`, soft-resets, reads the calibration set, pre-computes the gas heater set-point.
+- **On-device Bosch compensation.** Logs `SBIT_BME680` (0x02) as **3 floats** `{temperature °C, pressure Pa, humidity %RH}` — matches the protocol, so no parser change needed for T/P/H.
+- **Gas** logged separately as `SBIT_GAS` (0x20) — **1 float = resistance (ohm)**, emitted in POST/ARMED/COAST (interleaved ~1 s, only when the sensor flags it valid), OFF in BOOST.
+- **Mode-adaptive profiles:** PAD (POST/ARMED) ~10 Hz T/P/H + gas · BOOST ~50 Hz T/P/H, IIR off, gas off (low-lag altitude) · COAST ~50 Hz T/P/H + gas.
+- Forced-mode reads wait out the conversion (the gas heater needs ~100 ms). Validated vs references: pressure within ~1.5 hPa, humidity within ~3 %; temperature reads ~2 °C high (BME680 self-heating — subtract an offset in post if needed).
 
 ### Bench-test scaffolding — **REMOVE BEFORE FLIGHT**
 - `main.c` boots into `MODE_ARMED`; the **BOOT button (GPIO0)** cycles ARMED → BOOST → COAST to watch each sensor's per-mode behaviour live.
@@ -61,20 +62,24 @@ Active writer: `main/frame_logger.c` (→ `/sd/fly.bin`). Authoritative parser: 
 
 | Sensor | type | payload | format |
 |---|---|---|---|
-| MPU6500 | 0x01 | 14 B | 7×int16 (ax ay az temp gx gy gz) |
-| BME680 | 0x02 | **10 B (raw)** | press[3] temp[3] hum[2] gas[2] |
+| MPU6500 | 0x01 | 14 B | 7×int16 (ax ay az temp gx gy gz); accel scale per flight mode |
+| BME680 | 0x02 | 12 B | 3×float (temperature °C, pressure Pa, humidity %RH) |
 | GPS | 0x04 | 68 B | NMEA fields (ASCII) |
 | INA219 | 0x08 | 4 B | shunt:int16, bus:int16 |
-| SYSSTATE | 0x10 | — | (not yet emitted) |
-| BME680 calib | 0x20 | **40 B**, once | calib blob for offline compensation |
+| SYSSTATE | 0x10 | 1 B | uint8 flight mode — emitted on every mode change |
+| GAS | 0x20 | 4 B | 1×float (BME680 gas resistance, ohm) |
 
-## ⚠️ Firmware ↔ parser mismatches to resolve (`SD-Parser/frameparser.py`)
+## Firmware ↔ parser alignment
 
-1. **BME680:** parser expects 12 B / 3 floats (compensated); firmware now sends **10 B raw** + a **40 B calib** frame (0x20). Parser needs to decode raw and apply the Bosch compensation using the calib blob (incl. gas).
-2. **MPU accel scale (now mode-dependent):** firmware uses ±16 g (2048 LSB/g) in BOOST and ±2 g (16384 LSB/g) in every other phase. The parser hard-codes 2048 LSB/g, so it is only correct for BOOST frames — it must choose the divisor from the frame's flight phase (needs #5).
-3. **MPU temperature:** parser uses the MPU6050 formula; chip is an MPU6500 (`/333.87 + 21`).
-4. **CRC:** firmware computes CRC-16/CCITT; parser verification is stubbed (`return 0xFFFF`).
-5. **No per-frame mode tag:** frames don't record which flight mode produced them, so the parser can't know the accel range or that a BME680 temp sample is heater-biased (gas cycles). Consider a periodic `SYSSTATE` (0x10) frame carrying `context.mode`.
+Resolved — firmware and `SD-Parser/frameparser.py` now agree:
+1. **BME680** — compensated on-device into 3 floats; parser `proc_bme680` reads them (pressure → kPa for the dashboard). ✅
+2. **GAS** — new `0x20` packet; parser `proc_gas` (resistance, ohm). ✅
+3. **MPU accel scale** — firmware switches ±16 g (BOOST) / ±2 g (else) and emits a `SYSSTATE` (0x10) marker on each change; parser `proc_sysstate` tracks the mode and `proc_mpu6050` picks 2048 vs 16384 LSB/g accordingly. ✅
+4. **CRC** — parser implements CRC-16/CCITT matching the firmware (the verify check is present but still commented out).
+
+Still open:
+- **MPU temperature:** parser uses the MPU6050 formula (`/340 + 36.53`); chip is an MPU6500 (`/333.87 + 21`).
+- **GPS `+1` patch:** `frameparser.py` still does `total_packet_sz += 1` for GPS (flagged "DEPRECATED"). The firmware now sends 68 B in all paths, so that `+1` should be removed.
 
 ## Legacy / unused (cleanup candidates)
 

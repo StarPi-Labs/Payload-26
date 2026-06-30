@@ -478,8 +478,21 @@ void sysP2I_POST(System *sys){
 }
 
 
+/* Announce a mode change on the active stream so the parser can track the phase
+ * (e.g. to pick the MPU's +/-2g vs +/-16g accel scale). 1-byte payload = mode.
+ * Routes to the SD log in BOOST/COAST, or the telemetry buffer in POST/ARMED. */
+static void emit_sysstate(System *sys, uint32_t mode)
+{
+    uint8_t m = (uint8_t)mode;
+    if (mode == MODE_BOOST || mode == MODE_COAST) {
+        write_to_ring_buffer(sys->log_buffer, SBIT_SYSSTATE, &m, sizeof(m));
+    } else {
+        hm_send(sys->hm_buffer, SBIT_SYSSTATE, &m, sizeof(m));
+    }
+}
+
 void app_main(void)
-{   
+{
     static System sys;
     sysP2I_init(&sys);
     sysP2I_POST(&sys);
@@ -512,6 +525,7 @@ void app_main(void)
     const char    *mode_name[]  = { "ARMED", "BOOST", "COAST" };
     int idx = 0;
     sys.context.mode = test_modes[idx];
+    emit_sysstate(&sys, test_modes[idx]);
     ESP_LOGW("TEST", "BOOT button cycles mode: ARMED -> BOOST -> COAST (now ARMED)");
 
     int prev_level = 1;
@@ -520,6 +534,7 @@ void app_main(void)
         if (prev_level == 1 && level == 0) {        /* falling edge = press */
             idx = (idx + 1) % 3;
             sys.context.mode = test_modes[idx];
+            emit_sysstate(&sys, test_modes[idx]);
             ESP_LOGW("TEST", "mode -> %s", mode_name[idx]);
             vTaskDelay(pdMS_TO_TICKS(250));         /* debounce */
         }
