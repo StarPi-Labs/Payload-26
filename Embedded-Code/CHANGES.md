@@ -51,9 +51,14 @@ _First hardware bring-up of the ESP32-S3 board (June 2026)._
 - Per-sensor debug `ESP_LOGI`s are enabled (BME680 prints a ~2 Hz, mode-labelled echo — note the echo is throttled, so it does **not** reflect the real sampling rate).
 - **Live rate monitor** (`flight_stats.c`): a 1 Hz task logs the *achieved* samples/sec for every sensor, tagged with the flight mode — e.g. `[BOOST] mpu=80  ina=10  bme=28  gps=1  (Hz)`. This is the real per-mode rate (the per-sensor echoes are throttled and hide it). Each sensor task calls `flight_stats_tick()` on every produced sample.
 
+### Telemetry transport (wired, for now)
+- The S3 has **no Classic BT/SPP** (BLE-only), so the BT-disabled branch of `bt_serial_bridge.c` now streams the `hm_send` telemetry over **UART1 (TX=GPIO10) @ 115200** instead of SPP — same frame format, off a wire. Init moved out of the power-on-only path so it runs on every reset.
+- The telemetry/`hm` path is active in **POST/ARMED**; BOOST/COAST high-rate data goes to the SD log instead, so the wire is quiet in flight modes (by design).
+- Future: replace this one transport with an **ESP-NOW** link to a ground ESP32 that bridges to USB; the rest of the chain is unchanged.
+
 ## On-SD / over-BT frame format
 
-Active writer: `main/frame_logger.c` (→ `/sd/fly.bin`). Authoritative parser: `SD-Parser/frameparser.py` (also reads the same frames over Bluetooth at 115200).
+Active writer: `main/frame_logger.c` (→ `/sd/fly.bin`). Authoritative parser: `SD-Parser/frameparser.py` (also reads the same frames live over the telemetry UART / future ESP-NOW link at 115200).
 
 ```
 [0xAA 0xAA 0xAA] [type:u8] [timestamp_ms:u32 LE]  <payload>  [CRC16:2]

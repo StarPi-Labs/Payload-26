@@ -328,9 +328,6 @@ void sysP2I_init(System *sys) {
 
     if (reason == ESP_RST_POWERON) {
         memset(sys->record, 0, sizeof(FlightRecord));
-        bt_serial_init("GPS-Serial-Bluetooth");
-        vTaskDelay(pdMS_TO_TICKS(500)); // Compulsory attached to BLT initialization, 
-                                        // otherwise RF might affect measurments.
     } else {
         /* BENCH TEST: log-kill disabled so serial works on USB resets. On the S3,
          * flashing/monitoring triggers USB_UART_CHIP_RESET (not ESP_RST_POWERON),
@@ -346,6 +343,10 @@ void sysP2I_init(System *sys) {
                                                  */
         sys->record->boot_count++;
     }
+
+    /* Telemetry transport — wired UART now (BLE/ESP-NOW relay later). Init on
+     * every reset reason; on this target the "BT" bridge is a no-RF UART. */
+    bt_serial_init("StarPi-Telemetry");
 
     ESP_LOGI(TAG, "╔══════════════════════════════════╗");
     ESP_LOGI(TAG, "║     Star-PI Payload  v2.0        ║");

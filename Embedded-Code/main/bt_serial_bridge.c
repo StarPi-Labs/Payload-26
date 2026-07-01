@@ -178,31 +178,61 @@ bool bt_serial_has_client(void) {
     return s_bt_started && s_bt_has_client;
 }
 
-#else
+#else  /* No Classic BT/SPP on this target (e.g. ESP32-S3, BLE-only).
+        * Stream the same telemetry frames over a wired UART instead; the host
+        * reads them with frameparser/bin2json. Future: swap this transport for
+        * an ESP-NOW link to a ground ESP32 that bridges to USB. */
+
+#include "driver/uart.h"
 
 static const char *TAG = "BT_BRIDGE";
+
+/* Telemetry UART — TX only. Wire a USB-TTL adapter: adapter RX <- GPIO,
+ * adapter GND <-> ESP GND. Host opens that COM/tty at TELEM_BAUD. */
+#define TELEM_UART      UART_NUM_0
+#define TELEM_TX_PIN    10
+#define TELEM_BAUD      115200
+
+static bool s_started = false;
 
 bool bt_serial_init(const char *device_name)
 {
     (void)device_name;
-    ESP_LOGW(TAG, "Bluetooth SPP is disabled in sdkconfig");
-    return false;
+
+    const uart_config_t cfg = {
+        .baud_rate  = TELEM_BAUD,
+        .data_bits  = UART_DATA_8_BITS,
+        .parity     = UART_PARITY_DISABLE,
+        .stop_bits  = UART_STOP_BITS_1,
+        .flow_ctrl  = UART_HW_FLOWCTRL_DISABLE,
+        .source_clk = UART_SCLK_DEFAULT,
+    };
+    if (uart_driver_install(TELEM_UART, 256, 4096, 0, NULL, 0) != ESP_OK) {
+        ESP_LOGE(TAG, "telemetry UART install failed");
+        return false;
+    }
+    uart_param_config(TELEM_UART, &cfg);
+    uart_set_pin(TELEM_UART, TELEM_TX_PIN, UART_PIN_NO_CHANGE,
+                 UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
+    s_started = true;
+    ESP_LOGW(TAG, "Classic BT/SPP unavailable here — telemetry on UART%d TX=GPIO%d @ %d baud",
+             TELEM_UART, TELEM_TX_PIN, TELEM_BAUD);
+    return true;
 }
 
 void bt_serial_write_byte(uint8_t byte)
 {
-    (void)byte;
+    if (s_started) uart_write_bytes(TELEM_UART, (const char *)&byte, 1);
 }
 
 void bt_serial_write_chunk(uint8_t *data, uint16_t len)
 {
-    (void)data;
-    (void)len;
+    if (s_started && len) uart_write_bytes(TELEM_UART, (const char *)data, len);
 }
 
 bool bt_serial_has_client(void)
 {
-    return false;
+    return s_started;
 }
 
 #endif
