@@ -12,7 +12,9 @@
 #include "esp_log.h"
 #include "systemp2i.h"
 #include "flight_stats.h"
+#include "flight_state.h"
 #include "driver/gpio.h"
+#include <math.h>
 
 static const char *TAG = "MPU6050";
 
@@ -205,6 +207,7 @@ void mpu6050_task(void *arg) {
     uint8_t attempts = 0;
     uint16_t telemetry_counter = 0;
     uint32_t last_mode = 0xFFFFFFFFu;   /* force accel-range config on first sample */
+    float    accel_lsb_per_g = 16384.0f;/* current MPU sensitivity (+/-2g default) */
 
     while(1) {
         xTaskNotifyStateClear(NULL);
@@ -229,16 +232,25 @@ void mpu6050_task(void *arg) {
         flight_stats_tick(STAT_MPU6050);
         mpu6050_raw2int(mpu_info, mpu_raw);
 
-        /* Accelerometer range follows the flight mode: +/-16g during BOOST (high
-         * launch loads), +/-2g in every other phase (fine resolution). Written
-         * only on a mode transition. NOTE: post-processing must apply the matching
-         * sensitivity (2048 LSB/g at +/-16g, 16384 LSB/g at +/-2g) per phase. */
+        /* Feed |accel| (g) to the flight state machine — it may change the mode. */
+        float ax = mpu_info[0], ay = mpu_info[1], az = mpu_info[2];
+        float accel_g = sqrtf(ax * ax + ay * ay + az * az) / accel_lsb_per_g;
+        flight_state_update(tparams->context, accel_g);
+
+        /* Accel range + phase marker follow the mode (written on a transition):
+         * +/-16g in BOOST, +/-2g elsewhere. The SYSSTATE frame tells the parser
+         * which sensitivity to apply (2048 LSB/g @ +/-16g, 16384 @ +/-2g). */
         uint32_t mode = tparams->context->mode;
         if (mode != last_mode) {
             uint8_t accel_cfg = (mode == MODE_BOOST) ? MPU6050_ACCEL_16g : MPU6050_ACCEL_2g;
             if (i2c_bus_write_byte(s_dev, REG_ACCEL_CONFIG, accel_cfg) == ESP_OK) {
-                ESP_LOGI(TAG, "accel range -> %s",
-                         (accel_cfg == MPU6050_ACCEL_16g) ? "+/-16g" : "+/-2g");
+                accel_lsb_per_g = (mode == MODE_BOOST) ? 2048.0f : 16384.0f;
+                ESP_LOGI(TAG, "accel range -> %s", (mode == MODE_BOOST) ? "+/-16g" : "+/-2g");
+            }
+            uint8_t m8 = (uint8_t)mode;
+            write_to_ring_buffer(tparams->log_buffer, SBIT_SYSSTATE, &m8, 1);   /* always -> circular buffer */
+            if (mode == MODE_POST || mode == MODE_ARMED) {
+                hm_send(tparams->hm_buffer, SBIT_SYSSTATE, (uint8_t *)&m8, 1);   /* + live telemetry */
             }
             last_mode = mode;
         }
@@ -246,6 +258,8 @@ void mpu6050_task(void *arg) {
         switch(mode) {
         case MODE_POST:
         case MODE_ARMED:
+            write_to_ring_buffer(tparams->log_buffer, SBIT_MPU6050,
+                (uint8_t *)mpu_info, MPU6050_DATA_LEN);   /* always -> circular buffer */
             telemetry_counter++;
             if (telemetry_counter >= MPU6050_HM_SKIP_SAMPLES) {
                 telemetry_counter = 0;

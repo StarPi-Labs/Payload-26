@@ -189,8 +189,13 @@ static const char *TAG = "BT_BRIDGE";
 
 /* Telemetry UART — TX only. Wire a USB-TTL adapter: adapter RX <- GPIO,
  * adapter GND <-> ESP GND. Host opens that COM/tty at TELEM_BAUD. */
+/* DevKitC port mapping: the console now lives on USB-Serial-JTAG (the "USB"
+ * connector), which frees UART0 and its native pins GPIO43/44 — hardwired to
+ * the on-board CP210x bridge (the "UART" connector). Telemetry therefore
+ * comes out of the "UART" USB port with NO external wiring, and the two
+ * streams can never mix again. (sdkconfig: ESP_CONSOLE_USB_SERIAL_JTAG.) */
 #define TELEM_UART      UART_NUM_0
-#define TELEM_TX_PIN    10
+#define TELEM_TX_PIN    43
 #define TELEM_BAUD      115200
 
 static bool s_started = false;

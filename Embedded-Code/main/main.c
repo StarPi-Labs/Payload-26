@@ -28,6 +28,8 @@
 #include "sdkconfig.h"
 #include "sensor_config.h"
 #include "systemp2i.h"
+#include "flight_state.h"
+#include "status_led.h"
 #include "health_monitoring.h"
 #include "flight_stats.h"
 
@@ -254,18 +256,27 @@ void logging_start_task(System *sys) {
 
     params.hm_buffer = NULL;
     params.log_buffer = sys->log_buffer;
-    params.context = NULL;
+    params.context = &sys->context;   /* SD writer needs the mode (retain / dump / stream) */
     //params.args = (void *)&sys->open_log_file;
     //params.args = (void *)sys->card;
     params.args = (void *)&sys->sd_ctxt;
 
-    f = fopen(FLIGHT_LOG_FILE_PATH, "wb");
+    /* Fresh ARMED session -> new log. Resuming BOOST/COAST after an in-flight
+     * power cut -> APPEND, so the data recorded before the cut survives. */
+    f = NULL;
+    if (sys->health & (1 << FILESYSTEM_HEALTH)) {
+        const char *open_mode = (flight_state_boot_mode() == MODE_ARMED) ? "wb" : "ab";
+        f = fopen(FLIGHT_LOG_FILE_PATH, open_mode);
+        if (NULL == f) {
+            ESP_LOGE(TAG, "Failed to open %s (%s). err: %s", FLIGHT_LOG_FILE_PATH, open_mode, strerror(errno));
+        } else {
+            ESP_LOGW(TAG, "flight log %s opened in '%s' mode", FLIGHT_LOG_FILE_PATH, open_mode);
+        }
+    }
     if (NULL == f) {
-        ESP_LOGE(TAG, "Failed to open %s for appending. err: %s", FLIGHT_LOG_FILE_PATH, strerror(errno));
-        return;
+        ESP_LOGW(TAG, "no SD log — mirroring the exact SD byte stream over telemetry");
     }
     params.args = (void *)f;
-    ESP_LOGW("DEBUG", "1. fopen created FILE at address: %p", (void *)f);
 
     xTaskCreatePinnedToCore(
         logging_task,
@@ -404,12 +415,17 @@ void sysP2I_POST(System *sys){
     /*-- Initialise health monitoring buffer --*/
     sys->hm_buffer = hm_buff_init();
     hm_start_task(sys);
+
+    /*-- Status RGB LED: shows the flight mode (blue POST / green ARMED / red BOOST / amber COAST) --*/
+    status_led_init();
+    status_led_start_task(&sys->context);
     
 #if CONFIG_ENABLE_MPU6050
+    /* ── Phase 1: initialise every sensor — NO tasks yet, so the calibration
+     * frame below is guaranteed to be the FIRST telemetry frame of the boot. */
     if (sys->health & (1 << I2C0_HEALTH)) {
         if (ESP_OK == mpu6050_init(sys->port.mpu6050)) {
             sys->health |= (1 << MPU6050_HEALTH);
-            mpu6050_start_task(sys);
         }
     }
 #endif
@@ -418,14 +434,12 @@ void sysP2I_POST(System *sys){
 #if CONFIG_ENABLE_BME680
         if (ESP_OK == bme680_init(sys->port.bme_ina)) {
             sys->health |= (1 << BME680_HEALTH);
-            bme680_start_task(sys);
         }
 #endif
 
 #if CONFIG_ENABLE_INA219
         if (ESP_OK == ina219_init(sys->port.bme_ina)) {
             sys->health |= (1 << INA219_HEALTH);
-            ina219_start_task(sys);
         }
 #endif
     }
@@ -436,11 +450,51 @@ void sysP2I_POST(System *sys){
         if (ESP_OK == gps_probe(GPS_UART)) {
             sys->health |= (1 << GPS_HEALTH);
             gps_disable_non_essential_NMEA(GPS_UART);
-            gps_start_task(sys);
         } else {
             ESP_LOGE(TAG, "GPS probe failed at %d baud.", GPS_BAUD);
         }
     }
+#endif
+
+    /* ── Phase 2: calibration frame ───────────────────────────
+     * Raw sensor constants for ground-side conversion: sent over telemetry NOW
+     * (before any sensor task runs, so it is the first frame of every boot /
+     * re-arm) and written at the head of every SD log session by the logging
+     * task. All logged sensor frames are RAW; the ground applies the math. */
+    {
+        static struct calib_frame_v1 calib = {
+            .version              = 1,
+            .mpu_accel_fs_g_armed = 2,
+            .mpu_accel_fs_g_boost = 16,
+            .mpu_gyro_fs_dps      = 500,
+            .ina_shunt_mohm       = 100,
+        };
+#if CONFIG_ENABLE_BME680
+        if (sys->health & (1 << BME680_HEALTH)) {
+            uint16_t blen = 0;
+            const uint8_t *blob = bme680_get_calib_blob(&blen);
+            if (blob && blen == sizeof(calib.bme680)) {
+                memcpy(calib.bme680, blob, blen);
+            }
+        }
+#endif
+        logging_set_calib(&calib, sizeof(calib));                       /* -> SD session head */
+        hm_send(sys->hm_buffer, SBIT_CALIB, (uint8_t *)&calib, sizeof(calib));  /* -> telemetry */
+        ESP_LOGI(TAG, "calibration frame ready (%u B)", (unsigned)sizeof(calib));
+    }
+
+    /* ── Phase 3: start the sensor tasks (calib frame is already out) ── */
+#if CONFIG_ENABLE_MPU6050
+    if (sys->health & (1 << MPU6050_HEALTH)) mpu6050_start_task(sys);
+#endif
+#if CONFIG_ENABLE_BME680
+    if (sys->health & (1 << BME680_HEALTH))  bme680_start_task(sys);
+#endif
+#if CONFIG_ENABLE_INA219
+    if (sys->health & (1 << INA219_HEALTH))  ina219_start_task(sys);
+#endif
+#if CONFIG_ENABLE_GPS
+    if (sys->health & (1 << GPS_HEALTH))     gps_start_task(sys);
 #endif
 
 #if CONFIG_ENABLE_SD_SPI
@@ -448,7 +502,6 @@ void sysP2I_POST(System *sys){
         sys->sd_ctxt.card = & sys->card;
         if (ESP_OK == sys_mount_spi_card(SD_PORT, SD_MOUNT_POINT, &sys->sd_ctxt.card)) {
             sys->health |= (1 << FILESYSTEM_HEALTH);
-            logging_start_task(sys);
         }
         /*
         if (ESP_OK == sys_sd_init(SD_PORT, &sys->sd_ctxt.card, &sys->sd_ctxt.starting_sector)) {
@@ -462,6 +515,14 @@ void sysP2I_POST(System *sys){
         */
     }
 #endif
+
+    /* SD writer: drains the ring to /sd/fly.bin when a card is mounted. With no
+     * card (or a failed mount) it mirrors the IDENTICAL byte stream over the
+     * telemetry UART, so the PC can capture exactly what the SD would receive
+     * — including the calibration head, the ARMED sparse record, the
+     * pre-trigger dump on launch and the full-rate flight stream. */
+    logging_start_task(sys);
+
     /* Go/No-Go */
     // TODO: defined minimun required to flight
     // uint16_t required = (1 << I2C0_HEALTH) | (1 << MPU6050_HEALTH);
@@ -479,22 +540,14 @@ void sysP2I_POST(System *sys){
 }
 
 
-/* Announce a mode change on the active stream so the parser can track the phase
- * (e.g. to pick the MPU's +/-2g vs +/-16g accel scale). 1-byte payload = mode.
- * Routes to the SD log in BOOST/COAST, or the telemetry buffer in POST/ARMED. */
-static void emit_sysstate(System *sys, uint32_t mode)
-{
-    uint8_t m = (uint8_t)mode;
-    if (mode == MODE_BOOST || mode == MODE_COAST) {
-        write_to_ring_buffer(sys->log_buffer, SBIT_SYSSTATE, &m, sizeof(m));
-    } else {
-        hm_send(sys->hm_buffer, SBIT_SYSSTATE, &m, sizeof(m));
-    }
-}
-
 void app_main(void)
 {
     static System sys;
+
+    /* Resolve the boot flight-mode FIRST (NVS restore / BOOT-hold re-arm):
+     * the SD logger in POST needs it to pick append vs fresh log. */
+    flight_state_preinit();
+
     sysP2I_init(&sys);
     sysP2I_POST(&sys);
 
@@ -509,37 +562,29 @@ void app_main(void)
     xTaskCreatePinnedToCore(flight_stats_task, "rates", 3072,
                             (void *)&sys.context, 1, NULL, 0);
 
-    sys.context.mode = MODE_ARMED;   /* BENCH TEST: ARMED routes sensors to the
-                                      * debug/telemetry path (serial logs) instead of
-                                      * the SD ring buffer. Set back to MODE_BOOST (or
-                                      * wire the state machine) before flight. */
+    /* Flight state machine: restore the saved mode from NVS (or re-arm if BOOT is
+     * held ~1.5 s at boot), then the MPU task drives ARMED -> BOOST -> COAST. */
+    flight_state_init(&sys.context);
+    ESP_LOGW(TAG, "flight mode = %s  (BOOST at >= %.2f g; hold BOOT ~%d ms at boot to re-arm)",
+             sys.context.mode == MODE_ARMED ? "ARMED" :
+             sys.context.mode == MODE_BOOST ? "BOOST" :
+             sys.context.mode == MODE_COAST ? "COAST" : "?",
+             (double)FLIGHT_LAUNCH_TRIP_G, FLIGHT_REARM_HOLD_MS);
 
-    /* ── 6. BENCH TEST: cycle flight mode with the BOOT button (GPIO0) ───────
-     * Each press advances ARMED -> BOOST -> COAST -> ARMED. Sensors re-key their
-     * behaviour live (e.g. the BME680 enables its gas channel in COAST). If your
-     * board has no BOOT button, briefly tap GPIO0 to GND. Remove for flight —
-     * context.mode will be driven by the launch-detection state machine. */
-    gpio_set_direction(GPIO_NUM_0, GPIO_MODE_INPUT);
-    gpio_set_pull_mode(GPIO_NUM_0, GPIO_PULLUP_ONLY);
-
-    const uint32_t test_modes[] = { MODE_ARMED, MODE_BOOST, MODE_COAST };
-    const char    *mode_name[]  = { "ARMED", "BOOST", "COAST" };
-    int idx = 0;
-    sys.context.mode = test_modes[idx];
-    emit_sysstate(&sys, test_modes[idx]);
-    ESP_LOGW("TEST", "BOOT button cycles mode: ARMED -> BOOST -> COAST (now ARMED)");
-
-    int prev_level = 1;
+    /* Idle heartbeat. Re-sends the calibration frame over telemetry every ~30 s
+     * while on the pad, so a ground station attached late still receives the
+     * constants it needs to convert the raw sensor frames. */
+    int hb = 0;
     while (1) {
-        int level = gpio_get_level(GPIO_NUM_0);
-        if (prev_level == 1 && level == 0) {        /* falling edge = press */
-            idx = (idx + 1) % 3;
-            sys.context.mode = test_modes[idx];
-            emit_sysstate(&sys, test_modes[idx]);
-            ESP_LOGW("TEST", "mode -> %s", mode_name[idx]);
-            vTaskDelay(pdMS_TO_TICKS(250));         /* debounce */
+        vTaskDelay(pdMS_TO_TICKS(5000));
+        if (++hb >= 6) {
+            hb = 0;
+            uint32_t m = sys.context.mode;
+            if (m == MODE_POST || m == MODE_ARMED) {
+                const void *cp = NULL;
+                uint16_t cl = logging_get_calib(&cp);
+                if (cl) hm_send(sys.hm_buffer, SBIT_CALIB, (uint8_t *)cp, cl);
+            }
         }
-        prev_level = level;
-        vTaskDelay(pdMS_TO_TICKS(20));
     }
 }

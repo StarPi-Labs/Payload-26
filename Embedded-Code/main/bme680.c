@@ -1,12 +1,14 @@
 /**
  * @file bme680.c
- * @brief Bosch BME680 driver — on-device compensation + flight-mode profiles.
+ * @brief Bosch BME680 driver — RAW logging + flight-mode profiles.
  *
  *   - I2C1 (shared with INA219). Auto-detect 0x76/0x77, verify chip id 0x61.
- *   - On-device Bosch compensation. Logs SBIT_BME680 as 3 floats:
- *         { temperature [°C], pressure [Pa], humidity [%RH] }   (matches the protocol).
- *   - Gas: its own SBIT_GAS frame, 1 float = gas resistance [ohm], emitted in
+ *   - Logs RAW registers; ground applies the Bosch compensation from the
+ *     calibration frame (SBIT_CALIB carries the raw calib blob):
+ *         SBIT_BME680 = 8 bytes (press[3] temp[3] hum[2], register order)
+ *   - Gas: its own SBIT_GAS frame, 2 raw bytes (gas_r_msb, gas_r_lsb), emitted in
  *     POST/ARMED/COAST (interleaved ~1 Hz, only when the reading is valid). OFF in BOOST.
+ *   - The on-device compensation below is kept ONLY for the bench serial echo.
  *   - Forced mode: each sample triggers one measurement, waits out the conversion
  *     (the gas heater needs ~100 ms), reads field 0.
  *   - Profiles follow context.mode:
@@ -288,6 +290,13 @@ static esp_err_t bme680_measure(struct BME680Raw *out, bool with_gas)
 }
 
 /* ── Public API ───────────────────────────────────────────── */
+const uint8_t *bme680_get_calib_blob(uint16_t *len)
+{
+    _Static_assert(CALIB_LEN == BME680_CALIB_BLOB_LEN, "calib blob length mismatch");
+    if (len) *len = CALIB_LEN;
+    return s_calib;
+}
+
 esp_err_t bme680_init(i2c_master_bus_handle_t bus)
 {
     const uint8_t addrs[2] = { BME680_ADDR_LOW, BME680_ADDR_HIGH };
@@ -368,32 +377,34 @@ void bme680_task(void *arg)
         uint32_t adc_p = ((uint32_t)raw.press[0] << 12) | ((uint32_t)raw.press[1] << 4) | (raw.press[2] >> 4);
         uint16_t adc_h = ((uint16_t)raw.hum[0]   << 8)  |  raw.hum[1];
 
+        /* T/P/H frame: 8 RAW bytes (press[3] temp[3] hum[2]); ground compensates
+         * using the calibration frame. Always captured to the circular buffer;
+         * throttled telemetry on the pad. */
+        write_to_ring_buffer(tp->log_buffer, SBIT_BME680, &raw, 8);
+        if (mode == MODE_POST || mode == MODE_ARMED) {
+            if (++hm_counter >= BME680_HM_SKIP_SAMPLES) {
+                hm_counter = 0;
+                hm_send(tp->hm_buffer, SBIT_BME680, (uint8_t *)&raw, 8);
+            }
+        }
+
+        /* Gas: its own frame (2 raw bytes), only when measured and flagged valid. */
+        if (do_gas && (raw.gas[1] & GAS_VALID_BIT)) {
+            write_to_ring_buffer(tp->log_buffer, SBIT_GAS, raw.gas, 2);   /* always -> circular buffer */
+            if (mode == MODE_POST || mode == MODE_ARMED) {
+                hm_send(tp->hm_buffer, SBIT_GAS, raw.gas, 2);             /* + live telemetry */
+            }
+        }
+
+        /* Compensated values: BENCH ECHO ONLY (the log stays raw). */
         struct bme680_tph_t tph;
         tph.temperature = bme680_comp_temp(adc_t);   /* also sets cal.t_fine */
         tph.pressure    = bme680_comp_press(adc_p);
         tph.humidity    = bme680_comp_hum(adc_h, tph.temperature);
-
-        /* T/P/H frame: SD in flight, throttled telemetry on the pad. */
-        if (mode == MODE_BOOST || mode == MODE_COAST) {
-            write_to_ring_buffer(tp->log_buffer, SBIT_BME680, &tph, sizeof(tph));
-        } else if (mode == MODE_POST || mode == MODE_ARMED) {
-            if (++hm_counter >= BME680_HM_SKIP_SAMPLES) {
-                hm_counter = 0;
-                hm_send(tp->hm_buffer, SBIT_BME680, (uint8_t *)&tph, sizeof(tph));
-            }
-        }
-
-        /* Gas: its own frame, only when measured and the sensor flags it valid. */
         if (do_gas && (raw.gas[1] & GAS_VALID_BIT)) {
             uint16_t gas_adc   = ((uint16_t)raw.gas[0] << 2) | (raw.gas[1] >> 6);
             uint8_t  gas_range = raw.gas[1] & 0x0F;
-            float    gas_ohm   = bme680_comp_gas(gas_adc, gas_range);
-            last_gas_ohm = gas_ohm;
-            if (mode == MODE_COAST) {
-                write_to_ring_buffer(tp->log_buffer, SBIT_GAS, &gas_ohm, sizeof(gas_ohm));
-            } else {   /* POST / ARMED */
-                hm_send(tp->hm_buffer, SBIT_GAS, (uint8_t *)&gas_ohm, sizeof(gas_ohm));
-            }
+            last_gas_ohm = bme680_comp_gas(gas_adc, gas_range);
         }
 
         /* BENCH echo ~2 Hz (compensated, all modes). Remove for flight. */

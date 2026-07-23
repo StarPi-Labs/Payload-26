@@ -49,8 +49,10 @@
 #define SBIT_MQ10       (1 << 2)    // GPS.
 #define SBIT_INA219     (1 << 3)    // Power and Current.
 #define SBIT_SYSSTATE   (1 << 4)    // Flight mode (1 byte), emitted on mode change.
-#define SBIT_GAS        (1 << 5)    // BME680 gas resistance (own frame, 1 float).
-#define SBIT_RESERVED1  (1 << 6)    // Reserved
+#define SBIT_GAS        (1 << 5)    // BME680 raw gas registers (2 bytes: gas_r_msb, gas_r_lsb).
+#define SBIT_CALIB      (1 << 6)    // Calibration frame: raw sensor constants for ground-side
+                                    // conversion. Written at the head of every log session and
+                                    // sent once over telemetry at power-up.
 #define SBIT_RESERVED2  (1 << 7)    // Reserved
 
 /*-- Universal Header */
@@ -262,3 +264,30 @@ void send_telemetry(uint8_t packet, void *data, uint16_t payload_size);
 typedef struct LoggerBuffer LoggerBuffer;
 LoggerBuffer *logger_buff_init(void);
 void write_to_ring_buffer(struct LoggerBuffer *buf, uint8_t type, void *payload, uint16_t payload_size);
+
+/**
+ * Build one complete frame (sync + type + timestamp + payload + CRC16) into dst.
+ * dst must hold sizeof(frame_header_t) + payload_size + 2 bytes.
+ * @return total frame size in bytes.
+ */
+uint16_t frame_build(uint8_t *dst, uint8_t type, const void *payload, uint16_t payload_size);
+
+/**
+ * Stash the calibration-frame payload. The SD logging task writes it (as an
+ * SBIT_CALIB frame) at the head of every log session. Call before
+ * logging_start_task, i.e. right after the sensors are initialised.
+ */
+void logging_set_calib(const void *payload, uint16_t len);
+
+/** Get the stashed calibration payload. Returns its length (0 = none set). */
+uint16_t logging_get_calib(const void **payload);
+
+/** Calibration payload layout (version 1) — must match the ground parsers. */
+struct __attribute__((packed)) calib_frame_v1 {
+    uint8_t  version;                       /* = 1 */
+    uint8_t  bme680[40];                    /* raw calib blob, see bme680.h */
+    uint16_t mpu_accel_fs_g_armed;          /* accel full-scale outside BOOST [g]  (2)  */
+    uint16_t mpu_accel_fs_g_boost;          /* accel full-scale in BOOST [g]       (16) */
+    uint16_t mpu_gyro_fs_dps;               /* gyro full-scale [deg/s]             (500)*/
+    uint16_t ina_shunt_mohm;                /* INA219 shunt resistance [milliohm]  (100)*/
+};

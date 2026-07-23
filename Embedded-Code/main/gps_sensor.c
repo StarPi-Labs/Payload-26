@@ -93,6 +93,8 @@ void gps_rx_task(void *arg) {
             switch(tparams->context->mode) {
             case MODE_POST:
             case MODE_ARMED:
+                write_to_ring_buffer(tparams->log_buffer, SBIT_MQ10,
+                    (void *)&gps_info, sizeof(struct GPSInfo) - 1);   /* always -> circular buffer */
                 ESP_LOGI(TAG, "status=%c speed=%s course=%s time=%s lat=%s%c lon=%s%c sats=%s alt=%s",
                     gps_info.status,
                     gps_info.speed,

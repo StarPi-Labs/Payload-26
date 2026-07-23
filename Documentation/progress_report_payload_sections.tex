@@ -1,0 +1,93 @@
+% ═══════════════════════════════════════════════════════════════════
+%  Star-PI Payload — Progress Report draft sections (concise version)
+%  Drop-in chapters for the StarFly v1.0 LaTeX template.
+%  Placeholders marked with:  % TODO
+% ═══════════════════════════════════════════════════════════════════
+
+% ───────────────────────────────────────────────────────────────────
+%  SECTION 1 — Main systems description (payload part)
+% ───────────────────────────────────────────────────────────────────
+\chapter{Main systems description}
+
+The payload is a 1U-CubeSat-class autonomous data-acquisition unit that records the inertial, environmental, position and electrical history of the flight. A sensor suite (MPU6050 IMU, BME680 environmental sensor, u-blox SAM-M10Q GNSS receiver and INA219 power monitor) is read by an ESP32-S3 on-board computer, which timestamps every measurement as a raw binary frame and stores it on a microSD card. A software state machine detects launch and burnout from the accelerometer and adapts sampling to the flight phase. The payload is mechanically self-contained in an aluminium frame seated in a sabot.
+(Figure~\ref{fig:payload_arch}).
+
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=0.8\linewidth]{images/Diagramma_Payload.png}
+    \caption{Payload electrical architecture.}
+    \label{fig:payload_arch}
+\end{figure}
+
+% ───────────────────────────────────────────────────────────────────
+%  SECTION 2 — Detailed special design features description
+% ───────────────────────────────────────────────────────────────────
+\chapter{Detailed special design features description}
+
+The 1U CubeSat payload is designed around an external frame of aluminium extrusions carrying mounting plates for the various components. One distinct feature is the use of the extrusion profile itself to attach the electronics mounting plate, with no additional fasteners required; another is the use of Velcro for quick access to the battery pack.
+
+The payload is seated inside a sabot, which is the mechanical interface with the rocket fuselage and the payload bulkhead. The sabot is optimised to reduce surface contact with the fuselage without compromising stability, and it provides ventilation and a pass-through for the power cable connecting the rocket's power bus from the upper to the lower half. No additional fasteners are required inside the sabot.
+
+On the electronics side, every sensor is sampled by an independent task and logged as raw binary frames (sync marker, packet type, timestamp, CRC). A calibration frame written at power-up lets all conversion happen on the ground, keeping the flight code simple and deterministic. All frames pass through a circular buffer in PSRAM that always holds the most recent $\sim$10\,s of data: when launch is detected, this pre-trigger window is flushed to the SD card before continuous logging begins, so the ignition transient is captured even though it precedes the trigger.
+
+Launch and burnout are detected from a rolling average of the acceleration magnitude (2\,g threshold), and each state transition is saved to non-volatile memory: after a power interruption in flight the payload resumes in its saved state instead of re-arming, and only a deliberate operator action on the pad can reset it. The accelerometer range follows the phase ($\pm$16\,g during boost, $\pm$2\,g otherwise), and an RGB LED shows the current state for a pad-side visual check.
+
+
+% ───────────────────────────────────────────────────────────────────
+%  SECTION 3 — Materials and methods of manufacture
+% ───────────────────────────────────────────────────────────────────
+\chapter{List of materials and methods of manufacture to be employed}
+
+The payload combines commercial off-the-shelf (COTS) modules with several parts of our own design; its flight software and ground segment are entirely
+SRAD. Its load-bearing structure is built from aluminium extrusions joined by stainless-steel brackets and screws (all sourced from MakerBeam), while each
+electronic module is fixed to an in-house 3D-printed PETG platform with brass stand-offs and heat-set inserts.
+
+The payload is assembled exclusively by soldering, threaded fastening, FDM 3D printing and heat-insert pressing, and every threaded fastener is locked against vibration with Loctite threadlocker; no adhesives are used anywhere in its structure. During the prototype phase the modules are hand-soldered and wired point-to-point on a development carrier; for the flight unit this assembly will be consolidated into a more robust, vibration-tolerant form.
+
+The main materials and components are:
+
+\begin{itemize}
+    \item \textbf{Structure:} 6063-T5 aluminium extrusions, stainless-steel brackets and screws (MakerBeam); in-house 3D-printed PETG mounting platforms with brass stand-offs and heat-set inserts;
+    \item \textbf{On-board computer:} ESP32-S3-WROOM-1 N8R8 development board.
+    \item \textbf{Sensors:} MPU6050 6-axis IMU breakout; BME680 environmental sensor breakout; INA219 current/voltage monitor breakout with shunt resistor; u-blox SAM-M10Q GNSS module with ceramic patch antenna.
+    \item \textbf{Storage:} microSD card breakout (SPI).
+    \item \textbf{Interconnections:} soldered headers and crimped wire harness.
+\end{itemize}
+
+% ───────────────────────────────────────────────────────────────────
+%  SECTION 4 — Differentiating and unique characteristics
+% ───────────────────────────────────────────────────────────────────
+\chapter{Differentiating and unique characteristics}
+
+
+
+% ───────────────────────────────────────────────────────────────────
+%  SECTION 5 — Expected difficulties and criticalities
+% ───────────────────────────────────────────────────────────────────
+\chapter{Expected difficulties and criticalities}
+
+\textbf{Launch detection.} The 2\,g trigger threshold sits close to the
+saturation limit of the accelerometer's armed-phase range ($\pm$2\,g), and
+the noise-filtering window adds $\sim$100\,ms of latency. The trip level is
+therefore set slightly below the saturation rail, the window length is a
+single tunable parameter, and the pre-trigger buffer makes any residual
+latency harmless for data completeness.
+
+\textbf{Data integrity.} Boost vibration and supply dips can stall SD-card
+writes or corrupt the filesystem. The design mitigates this with the PSRAM
+write-behind buffer, append-only file handling with periodic sync, and
+automatic resume after a brownout; the mechanical retention of the SD card in
+its socket remains to be validated in vibration testing.
+
+\textbf{Sensor limitations.} The BME680 self-heats by $\sim$2\,°C (corrected
+on the ground), the GNSS receiver is expected to lose lock during boost and
+is treated as a recovery-phase instrument, and an I\textsuperscript{2}C bus
+lock-up under vibration would isolate the affected sensor: the health bitmap
+lets a single failure degrade, but not stop, the acquisition.
+
+\textbf{Test coverage.} The boost environment cannot be reproduced on the
+bench, so verification is decomposed into shake tests for the trigger,
+simulated flight profiles for the state machine and storage path, and
+endurance runs for thermal and power stability. The first flight is the
+qualification of the integrated system — acceptable because the payload is
+inert and cannot affect vehicle safety.

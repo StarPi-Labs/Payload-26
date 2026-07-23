@@ -305,84 +305,131 @@ FILE *frame_logger_get_file(void)
 /**
  * LOGGER 
  */
-// This buffer is used for storage
+// Circular history buffer (PSRAM) + mode-aware SD writer.
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
-#define SECTOR_SIZE     8192    // 8 blocks of SD card (512 bytes each).
+#include "freertos/task.h"
+#include "esp_heap_caps.h"
+#include "esp_timer.h"
+#include "bt_serial_bridge.h"
+#include <stdbool.h>
+
+#define LOG_RING_CAP      (256 * 1024)  /* PSRAM circular buffer size */
+#define LOG_RING_MIN      (32  * 1024)  /* fallback if PSRAM is unavailable */
+#define LOG_PRETRIG_BYTES (32  * 1024)  /* dumped to SD on BOOST (~10 s of armed-rate history) */
+#define LOG_SPARSE_MS     10000         /* ARMED: write a recent slice to SD this often */
+#define LOG_SPARSE_BYTES  1024          /* ARMED: bytes per sparse write */
+#define LOG_STAGING       4096          /* SD write chunk */
                             
 struct LoggerBuffer {
-    SemaphoreHandle_t ready;
     SemaphoreHandle_t lock;
-    volatile uint8_t bufA[SECTOR_SIZE];
-    volatile uint8_t bufB[SECTOR_SIZE];
-    volatile uint8_t *active_fill_buffer;
-    volatile uint8_t *active_save_buffer;
-    volatile uint32_t fill_index;
+    uint8_t          *buf;
+    size_t            cap;
+    volatile uint64_t head;   /* total bytes ever written (monotonic) */
 };
 
+/* Append `len` bytes at the write head, wrapping. Caller holds the lock. */
+static void rb_put(struct LoggerBuffer *b, const uint8_t *src, size_t len)
+{
+    size_t off   = (size_t)(b->head % b->cap);
+    size_t first = b->cap - off;
+    if (first > len) first = len;
+    memcpy(b->buf + off, src, first);
+    if (len > first) memcpy(b->buf, src + first, len - first);
+    b->head += len;
+}
+
+/* Copy `len` bytes starting at absolute offset `from` into dst. Caller holds the lock. */
+static void rb_copy(struct LoggerBuffer *b, uint64_t from, uint8_t *dst, size_t len)
+{
+    size_t off   = (size_t)(from % b->cap);
+    size_t first = b->cap - off;
+    if (first > len) first = len;
+    memcpy(dst, b->buf + off, first);
+    if (len > first) memcpy(dst + first, b->buf, len - first);
+}
+
 LoggerBuffer *logger_buff_init(void) {
-    DRAM_ATTR static LoggerBuffer buf;
-    buf.ready = xSemaphoreCreateBinary();
-    buf.lock = xSemaphoreCreateMutex();
-    buf.active_fill_buffer = buf.bufA;
-    buf.active_save_buffer = NULL;
-    buf.fill_index = 0;
-    return &buf;
+    static LoggerBuffer lb;
+    lb.cap = LOG_RING_CAP;
+    lb.buf = heap_caps_malloc(lb.cap, MALLOC_CAP_SPIRAM);
+    if (lb.buf == NULL) {                 /* PSRAM off -> smaller internal fallback */
+        lb.cap = LOG_RING_MIN;
+        lb.buf = heap_caps_malloc(lb.cap, MALLOC_CAP_8BIT);
+        ESP_LOGW(TAG, "no PSRAM: log ring = %u B internal RAM", (unsigned)lb.cap);
+    } else {
+        ESP_LOGI(TAG, "log ring = %u B in PSRAM", (unsigned)lb.cap);
+    }
+    lb.head = 0;
+    lb.lock = xSemaphoreCreateMutex();
+    return &lb;
 }
 
 
-void 
-write_to_ring_buffer(
-    struct LoggerBuffer *buf,
-    uint8_t type,
-    void *payload, 
-    uint16_t payload_size
-) 
+uint16_t frame_build(uint8_t *dst, uint8_t type, const void *payload, uint16_t payload_size)
 {
-    uint16_t total_sz = sizeof(frame_header_t) + payload_size + 2;
-    uint8_t *my_write_pointer = NULL;
-    uint16_t crc = 0xFFFF;
     frame_header_t header;
-    
-    // This can be Wrapped {
-    header.frame_info = type;
+    uint16_t crc = 0xFFFF;
+
+    header.frame_info         = type;
     header.frame_separator[0] = 0xAA;
     header.frame_separator[1] = 0xAA;
     header.frame_separator[2] = 0xAA;
-    header.timestamp_ms = xTaskGetTickCount() * portTICK_PERIOD_MS;
-    crc16_ccitt(&crc, (uint8_t *) &header, sizeof(header));
-    crc16_ccitt(&crc, (uint8_t *) payload, payload_size);
-    // Wrapping ends }
+    header.timestamp_ms       = xTaskGetTickCount() * portTICK_PERIOD_MS;
+    crc16_ccitt(&crc, (uint8_t *)&header, sizeof(header));
+    crc16_ccitt(&crc, (const uint8_t *)payload, payload_size);
 
+    memcpy(dst, &header, sizeof(header));
+    memcpy(dst + sizeof(header), payload, payload_size);
+    memcpy(dst + sizeof(header) + payload_size, &crc, 2);
+    return sizeof(header) + payload_size + 2;
+}
+
+/* Calibration payload, stashed by logging_set_calib and written at the head of
+ * every SD log session so the ground can convert raw frames standalone. */
+#define CALIB_PAYLOAD_MAX 96
+static uint8_t  s_calib_payload[CALIB_PAYLOAD_MAX];
+static uint16_t s_calib_len = 0;
+
+void logging_set_calib(const void *payload, uint16_t len)
+{
+    if (len > CALIB_PAYLOAD_MAX) len = CALIB_PAYLOAD_MAX;
+    memcpy(s_calib_payload, payload, len);
+    s_calib_len = len;
+}
+
+uint16_t logging_get_calib(const void **payload)
+{
+    if (payload) *payload = s_calib_payload;
+    return s_calib_len;
+}
+
+void
+write_to_ring_buffer(
+    struct LoggerBuffer *buf,
+    uint8_t type,
+    void *payload,
+    uint16_t payload_size
+)
+{
+    frame_header_t header;
+    uint16_t crc = 0xFFFF;
+
+    header.frame_info         = type;
+    header.frame_separator[0] = 0xAA;
+    header.frame_separator[1] = 0xAA;
+    header.frame_separator[2] = 0xAA;
+    header.timestamp_ms       = xTaskGetTickCount() * portTICK_PERIOD_MS;
+    crc16_ccitt(&crc, (uint8_t *)&header, sizeof(header));
+    crc16_ccitt(&crc, (uint8_t *)payload, payload_size);
+
+    if (buf == NULL || buf->buf == NULL) return;
+
+    /* Append header + payload + CRC into the circular buffer (overwrites oldest). */
     xSemaphoreTake(buf->lock, portMAX_DELAY);
-    // taskENTER_CRITICAL(&buffer_guard); // Legacy
-
-    if (buf->fill_index + total_sz > SECTOR_SIZE) {
-        // pad the missing space
-        memset((void *)(buf->active_fill_buffer + buf->fill_index), 
-            0, 
-            SECTOR_SIZE - buf->fill_index
-        );
-
-        buf->active_save_buffer = buf->active_fill_buffer;
-        buf->active_fill_buffer = (buf->active_fill_buffer == buf->bufA) \
-                                  ? buf->bufB : buf->bufA;
-        buf->fill_index = 0;
-
-        // Wake up the logger
-        xSemaphoreGive(buf->ready);
-    } 
-
-    my_write_pointer = (uint8_t *)(buf->active_fill_buffer + buf->fill_index);
-    buf->fill_index += total_sz;
-    // taskEXIT_CRITICAL(&buffer_guard); // Legacy
-
-    memcpy(my_write_pointer, &header, sizeof(header));
-    my_write_pointer += sizeof(header);
-    memcpy(my_write_pointer, payload, payload_size);
-    my_write_pointer += payload_size;
-    memcpy(my_write_pointer, &crc, 2);
-
+    rb_put(buf, (uint8_t *)&header, sizeof(header));
+    rb_put(buf, (uint8_t *)payload, payload_size);
+    rb_put(buf, (uint8_t *)&crc, 2);
     xSemaphoreGive(buf->lock);
 }
 
@@ -396,81 +443,105 @@ esp_err_t logging_init(int *fd, char *filename) {
     return ESP_OK;
 }
 
-void logging_task(void *args) {
-    struct TaskParams *tparams = (struct TaskParams *) args;
-    struct LoggerBuffer *buf = tparams->log_buffer;
-    FILE *f = (FILE *) tparams->args;
-    uint8_t write_counter = 0;
-    ssize_t written = 0;
+/* Write to the SD file — or, with no file (no card / mount failure), mirror
+ * the exact same bytes over the telemetry link so the PC can capture the
+ * identical stream the SD card would have received. */
+static void log_sink(FILE *f, const uint8_t *buf, size_t len)
+{
+    if (f) fwrite(buf, 1, len, f);
+    else   bt_serial_write_chunk((uint8_t *)buf, (uint16_t)len);
+}
 
+void logging_task(void *args) {
+    struct TaskParams   *tparams = (struct TaskParams *)args;
+    struct LoggerBuffer *b       = tparams->log_buffer;
+    struct SysContext   *ctx     = tparams->context;
+    FILE                *f       = (FILE *)tparams->args;
+    static uint8_t stage[LOG_STAGING];
+    uint64_t sd_total    = 0;
+    bool     streaming   = false;
+    int64_t  last_sparse = 0;
+    int64_t  last_calib  = 0;
+    int      flush_ctr   = 0;
 
     if (NULL == f) {
-        ESP_LOGE(TAG, "File descriptor Empyt");
-        // TODO: report this event an and flag sd as broken.
-        while(1);
+        ESP_LOGW(TAG, "no log file — mirroring the SD stream to telemetry");
     }
-    setvbuf(f, NULL, _IONBF, 0);
 
-    ESP_LOGW("DEBUG", "2. Task received FILE at address: %p", (void *)f);
+    /* Calibration frame first: every session starts with the constants the
+     * ground needs to convert this log's raw frames. */
+    if (s_calib_len) {
+        uint16_t n = frame_build(stage, SBIT_CALIB, s_calib_payload, s_calib_len);
+        log_sink(f, stage, n);
+        if (f) { fflush(f); fsync(fileno(f)); }
+        ESP_LOGI(TAG, "calibration frame written (%u B payload)", (unsigned)s_calib_len);
+    }
 
-    while(1) {
-        xSemaphoreTake(buf->ready, portMAX_DELAY);
-        if (buf->active_save_buffer != NULL) {
-            written = fwrite((const void*) buf->active_save_buffer, 1, SECTOR_SIZE, f);
-            ESP_LOGI(TAG, "write_counter %d", written);
-            if (write_counter & 0x01) {
-                fsync(fileno(f));
+    while (1) {
+        uint32_t mode = ctx ? ctx->mode : MODE_COAST;
+        bool flight = (mode == MODE_BOOST || mode == MODE_COAST);
+
+        /* Mirror mode only: re-send the calibration frame every ~10 s in EVERY
+         * mode, so a PC capture attached at any moment (even mid-COAST) soon
+         * receives the constants to convert the raw frames. The parser always
+         * applies the newest calib frame to all frames that follow it. */
+        if (NULL == f && s_calib_len) {
+            int64_t now_c = esp_timer_get_time();
+            if (now_c - last_calib >= 10000000LL) {
+                uint16_t n = frame_build(stage, SBIT_CALIB, s_calib_payload, s_calib_len);
+                log_sink(f, stage, n);
+                last_calib = now_c;
             }
-            if (written == SECTOR_SIZE) {
-                write_counter++;
+        }
+
+        /* Launch: rewind the SD cursor by the pre-trigger window, then stream. */
+        if (flight && !streaming) {
+            xSemaphoreTake(b->lock, portMAX_DELAY);
+            uint64_t head = b->head;
+            xSemaphoreGive(b->lock);
+            uint64_t pre = (head > LOG_PRETRIG_BYTES) ? LOG_PRETRIG_BYTES : head;
+            sd_total  = head - pre;
+            streaming = true;
+            ESP_LOGW(TAG, "launch: dumping %u B pre-trigger, then streaming", (unsigned)pre);
+        }
+
+        if (streaming) {
+            xSemaphoreTake(b->lock, portMAX_DELAY);
+            uint64_t head = b->head;
+            if (head - sd_total > b->cap) sd_total = head - b->cap;   /* SD too slow: keep last cap */
+            size_t avail = (size_t)(head - sd_total);
+            size_t chunk = (avail > LOG_STAGING) ? LOG_STAGING : avail;
+            if (chunk) rb_copy(b, sd_total, stage, chunk);
+            xSemaphoreGive(b->lock);
+
+            if (chunk) {
+                log_sink(f, stage, chunk);
+                sd_total += chunk;
+                if (f && ++flush_ctr >= 8) { fflush(f); fsync(fileno(f)); flush_ctr = 0; }
+                if (chunk == LOG_STAGING) continue;   /* backlog remains: keep draining */
             }
+            vTaskDelay(pdMS_TO_TICKS(20));
+        } else {
+            /* ARMED/POST: retain full rate in RAM, trickle a recent slice to SD. */
+            int64_t now = esp_timer_get_time();
+            if (now - last_sparse >= (int64_t)LOG_SPARSE_MS * 1000) {
+                last_sparse = now;
+                xSemaphoreTake(b->lock, portMAX_DELAY);
+                uint64_t head = b->head;
+                size_t n = (head > LOG_SPARSE_BYTES) ? LOG_SPARSE_BYTES : (size_t)head;
+                if (n) rb_copy(b, head - n, stage, n);
+                xSemaphoreGive(b->lock);
+                if (n) {
+                    log_sink(f, stage, n);
+                    if (f) { fflush(f); fsync(fileno(f)); }
+                }
+            }
+            vTaskDelay(pdMS_TO_TICKS(100));
         }
     }
 }
 
-/*
- * This is a high-performance task. Missing samples is FORBIDDEN!. By implementing
- * a double buffering mechanism and dumbing whole data into the SD card, the
- * required reliability is met.
- */
-void logging_task_legacy(void *args) {
-    struct TaskParams *tparams = (struct TaskParams *) args;
-    struct LoggerBuffer *buf = tparams->log_buffer;
-    int *fd = (int *)tparams->args;
-    uint8_t write_counter = 0;
-    ssize_t written = 0;
-
-    if (*fd < 0) {
-        // TODO: trigger health or attempt to open it again.
-        // Try to mount and open the file again, i guess, but this is not supposed to be negative here.
-        ESP_LOGI(TAG,"File descriptor error.");
-        while(1);
-    }
-
-    // TODO: this needs a context as well, so it can shutdown the logging once it landed
-    while(1) {
-        xSemaphoreTake(buf->ready, portMAX_DELAY);
-        if (buf->active_save_buffer != NULL) {
-            // TODO: 1. try to write, but wait for it to be done. and try again if
-            // it fails. Probably writing failures will be linked to SD 
-            // disconnection, so, re-mounting will be required. This is an extreme
-            // hardware requirement.
-            // 2. flush
-            // 3. TODO: this will be probably be removed, since we are wrting raw on sectors.
-            written = write(*fd, (const void *)buf->active_save_buffer, SECTOR_SIZE);
-            if (written == SECTOR_SIZE) {
-                // TODO: what happens if it fails?
-                write_counter++;
-            }
-
-            // update FAT table every whole double buffer write.
-            if (write_counter & 0x1) {
-                fsync(*fd);
-            }
-        }
-    }
-
-    while(1);
-}
+/* (The legacy raw-sector double-buffer logging_task was removed — superseded by
+ * the PSRAM circular buffer + mode-aware logging_task above.) */
 
 #endif /* CONFIG_ENABLE_SD_CARD */

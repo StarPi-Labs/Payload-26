@@ -208,6 +208,8 @@ void IRAM_ATTR ina219_task(void *arg) {
         switch(tparams->context->mode) {
         case MODE_POST:
         case MODE_ARMED:
+            write_to_ring_buffer(tparams->log_buffer, SBIT_INA219,
+                (void *)&ina219_info, sizeof(struct INA219Info));   /* always -> circular buffer */
             telemetry_counter++;
             if (telemetry_counter >= INA219_HM_SKIP_SAMPLES) {
                 ESP_LOGI(TAG, "I=%.1f mA  Vbus=%.3f V  (shunt_raw=%d)",
