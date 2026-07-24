@@ -35,6 +35,25 @@ time,altitude,altitudeMSL,velocity,horizontalVelocity,acceleration,accelerationX
 | roll | Roll angle | degrees |
 | yaw | Yaw angle | degrees |
 
+## Metadata Lines
+
+Optional `#key=value` lines before the header are parsed and returned via
+the `/api/flights/<id>/telemetry` endpoint's `meta` object:
+
+```
+# targetAltitude=3000.0
+# departureAltitude=12.0
+# t0=2026-07-23T14:02:11+00:00
+# modeTransitions=0.000:INIT,0.412:POST,2.100:ARMED,5.884:BOOST,9.220:COAST
+```
+
+`modeTransitions` marks each point where the flight's state machine changed
+mode: a comma-separated list of `time:mode` pairs (`time` in seconds from
+launch, `mode` one of `INIT`/`POST`/`SNSCHK`/`ARMED`/`BOOST`/`COAST`, matching
+the firmware enum in `Embedded-Code/main/systemp2i.h`). `json2telemetry.py`
+computes this automatically from SYSSTATE frames; the Dashboard renders it as
+tick marks on the timeline scrubber.
+
 ## Flexible Parsing
 
 The server supports:

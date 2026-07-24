@@ -1,5 +1,7 @@
 export interface NavigationCardProps {
     altitude?: number | null
+    altitudeMSL?: number | null
+    gpsAltitude?: number | null
     verticalVelocity?: number | null
     horizontalVelocity?: number | null
     latitude?: number | null

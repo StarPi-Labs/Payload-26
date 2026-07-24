@@ -76,6 +76,9 @@ SCHEMA_FIELDS = [
 # SD-Parser/json2telemetry.py -> ../Dashboard/Backend/data
 DASHBOARD_DATA_DIR = Path(__file__).resolve().parent.parent / "Dashboard" / "Backend" / "data"
 
+# Must match the firmware enum (systemp2i.h) / flight_stats.c's name array.
+MODE_NAMES = ["INIT", "POST", "SNSCHK", "ARMED", "BOOST", "COAST"]
+
 G = 9.80665            # standard gravity: g -> m/s^2
 KMH_TO_MS = 1.0 / 3.6
 
@@ -107,10 +110,18 @@ def convert(frames, target_altitude=None, departure_altitude=0.0):
     ground_pressure = None
     last_alt, last_t = None, None
     first_gps_row = None   # index of the first row with a real GPS fix
+    last_mode = None
+    mode_transitions = []  # [{"time": t_s, "mode": name}, ...], one per change
     rows = []
 
     for d in frames:
         t_s = (d["sys-timestamp_ms"] - t0_ms) / 1000.0
+
+        if "mode" in d and d["mode"] != last_mode:
+            last_mode = d["mode"]
+            name = (MODE_NAMES[last_mode] if 0 <= last_mode < len(MODE_NAMES)
+                    else str(last_mode))
+            mode_transitions.append({"time": t_s, "mode": name})
 
         if "accelerationX" in d:
             state["accelerationX"] = d["accelerationX"] * G
@@ -175,6 +186,7 @@ def convert(frames, target_altitude=None, departure_altitude=0.0):
         "departureAltitude": departure_altitude,
         "t0": iso_t0,
         "t0EpochMs": t0_epoch_ms,
+        "modeTransitions": mode_transitions,
     }
     return rows, meta
 
@@ -186,6 +198,11 @@ def write_txt(rows, meta, path):
         f.write(f"# departureAltitude={meta.get('departureAltitude', 0.0)}\n")
         if meta.get("t0") is not None:
             f.write(f"# t0={meta['t0']}\n")
+        if meta.get("modeTransitions"):
+            # time:mode pairs, comma-separated -- see server.py's parser.
+            encoded = ",".join(f"{t['time']:.3f}:{t['mode']}"
+                                for t in meta["modeTransitions"])
+            f.write(f"# modeTransitions={encoded}\n")
         f.write(",".join(SCHEMA_FIELDS) + "\n")
         for r in rows:
             f.write(",".join(str(r[k]) for k in SCHEMA_FIELDS) + "\n")

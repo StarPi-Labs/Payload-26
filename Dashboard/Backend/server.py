@@ -41,6 +41,7 @@ def parse_sensor_file_with_meta(file_path):
         'departureAltitude': None,
         't0': None,
         't0EpochMs': None,
+        'modeTransitions': [],
     }
 
     with open(file_path, 'r') as f:
@@ -85,6 +86,19 @@ def parse_sensor_file_with_meta(file_path):
                             meta['t0'] = datetime.fromtimestamp(epoch_ms / 1000).isoformat()
                     except ValueError:
                         pass
+                elif key == 'modeTransitions':
+                    # "time:mode,time:mode,..." -- see json2telemetry.py's writer.
+                    transitions = []
+                    for part in value.split(','):
+                        part = part.strip()
+                        if ':' not in part:
+                            continue
+                        time_str, mode_str = part.split(':', 1)
+                        try:
+                            transitions.append({'time': float(time_str), 'mode': mode_str.strip()})
+                        except ValueError:
+                            pass
+                    meta['modeTransitions'] = transitions
             continue
         data_lines.append(line)
 
@@ -295,6 +309,7 @@ def get_telemetry(flight_id):
     target_altitude = None
     t0 = None
     t0_epoch_ms = None
+    mode_transitions = []
     for filename in sorted(os.listdir(telemetry_dir)):
         if allowed_file(filename, ALLOWED_DATA_EXTENSIONS):
             file_path = os.path.join(telemetry_dir, filename)
@@ -305,11 +320,14 @@ def get_telemetry(flight_id):
                 t0 = meta.get('t0')
             if t0_epoch_ms is None and meta.get('t0EpochMs') is not None:
                 t0_epoch_ms = meta.get('t0EpochMs')
+            if meta.get('modeTransitions'):
+                mode_transitions.extend(meta['modeTransitions'])
             all_data.extend(data)
-    
+
     # Sort by time
     all_data.sort(key=lambda x: x.get('time', 0))
-    
+    mode_transitions.sort(key=lambda x: x.get('time', 0))
+
     return jsonify({
         'flight_id': flight_id,
         'data': all_data,
@@ -317,6 +335,7 @@ def get_telemetry(flight_id):
             'targetAltitude': target_altitude,
             't0': t0,
             't0EpochMs': t0_epoch_ms,
+            'modeTransitions': mode_transitions,
         }
     })
 

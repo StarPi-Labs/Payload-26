@@ -1,10 +1,19 @@
-import { Component } from "solid-js"
+import { Component, createMemo } from "solid-js"
 import { NavigationCardProps } from "../../models/ui/navigation-card-props"
 import TelemetryCard from "./TelemetryCard"
 import MetricStat from "./MetricStat"
 import StatusChip from "./StatusChip"
 
 const NavigationCard: Component<NavigationCardProps> = (props) => {
+    // Vertical velocity is the derivative of the barometric altitude, so its
+    // sign directly says whether altitude is currently rising or falling.
+    const altitudeTrend = createMemo(() => {
+        const v = props.verticalVelocity ?? 0
+        if (v > 0.2) return "up" as const
+        if (v < -0.2) return "down" as const
+        return "flat" as const
+    })
+
     return (
         <TelemetryCard
             title="Navigation"
@@ -17,6 +26,24 @@ const NavigationCard: Component<NavigationCardProps> = (props) => {
                     value={props.altitude}
                     unit="m"
                     precision={1}
+                    trend={altitudeTrend()}
+                    hint="barometric, above pad"
+                    class="lg:col-span-2"
+                />
+                <MetricStat
+                    label="Altitude MSL"
+                    value={props.altitudeMSL}
+                    unit="m"
+                    precision={1}
+                    hint="barometric, above sea level"
+                    class="lg:col-span-2"
+                />
+                <MetricStat
+                    label="GPS Altitude"
+                    value={props.gpsAltitude}
+                    unit="m"
+                    precision={1}
+                    hint="from GNSS fix"
                     class="lg:col-span-2"
                 />
                 <MetricStat
@@ -33,6 +60,7 @@ const NavigationCard: Component<NavigationCardProps> = (props) => {
                     precision={1}
                     class="lg:col-span-2"
                 />
+                <div class="lg:col-span-2" />
                 <MetricStat
                     label="Latitude"
                     value={props.latitude}

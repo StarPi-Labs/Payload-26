@@ -1,4 +1,5 @@
 import { Component, Show } from "solid-js"
+import { FiArrowUp, FiArrowDown, FiMinus } from "solid-icons/fi"
 import { MetricStatProps } from "../../models/ui/metric-stat-props"
 
 const MetricStat: Component<MetricStatProps> = (props) => {
@@ -13,13 +14,26 @@ const MetricStat: Component<MetricStatProps> = (props) => {
         return value
     }
 
+    const trendColorClass = () => {
+        if (props.trend === "up") return "text-success"
+        if (props.trend === "down") return "text-error"
+        return "text-base-content/40"
+    }
+
     return (
         <div class={`stat bg-base-100/70 border border-base-300 rounded-box p-3 ${props.class ?? ""}`}>
             <div class="stat-title text-xs uppercase tracking-wide text-base-content/60">{props.label}</div>
-            <div class="stat-value text-2xl">
+            <div class="stat-value text-2xl flex items-center gap-1">
                 {formattedValue()}
                 <Show when={props.unit}>
                     <span class="text-base font-medium ml-1">{props.unit}</span>
+                </Show>
+                <Show when={props.trend}>
+                    <span class={trendColorClass()}>
+                        {props.trend === "up" && <FiArrowUp class="w-4 h-4" />}
+                        {props.trend === "down" && <FiArrowDown class="w-4 h-4" />}
+                        {props.trend === "flat" && <FiMinus class="w-4 h-4" />}
+                    </span>
                 </Show>
             </div>
             <Show when={props.hint}>

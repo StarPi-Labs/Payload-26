@@ -1,4 +1,4 @@
-import { Component, onMount, createEffect, onCleanup } from "solid-js";
+import { Component, onMount, createEffect, on, onCleanup } from "solid-js";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import TelemetryCard from "./base/TelemetryCard";
@@ -6,21 +6,31 @@ import {RocketMapCardProps} from "../models/ui/rocket-map-card-props"
 
 const RocketMapCard: Component<RocketMapCardProps> = (props) => {
   let mapRef: HTMLDivElement | undefined;
-  
+
   let map: L.Map | undefined;
   let currentMarker: L.Marker | undefined;
+  let startMarker: L.Marker | undefined;
   let trajectory: L.Polyline | undefined;
+  let redIcon: L.Icon | undefined;
+  let rocketIconRef: L.DivIcon | undefined;
+  // No real fix has been drawn yet (or the flight was just switched): the
+  // next position update should re-anchor the trail here instead of
+  // accumulating onto whatever was drawn before -- this is what stopped the
+  // map from starting every trajectory at (0, 0) before telemetry loads.
+  let needsAnchor = true;
 
   onMount(() => {
     if (!mapRef) return;
-    
-    map = L.map(mapRef).setView([props.latitude, props.longitude], 14);
+
+    // Neutral placeholder view -- NOT tied to props.latitude/longitude,
+    // which at mount time is just the zeroed default sample.
+    map = L.map(mapRef).setView([20, 0], 2);
 
     L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
       attribution: '&copy; OpenStreetMap contributors',
     }).addTo(map);
 
-    
+
     // icona razzo (pos attuale)
     const rocketHtml = `
       <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 256 256" style="filter: drop-shadow(0px 2px 4px rgba(0,0,0,0.5)); transform: rotate(45deg);">
@@ -38,7 +48,7 @@ const RocketMapCard: Component<RocketMapCardProps> = (props) => {
     });
 
     // icona partenza
-    const redIcon = new L.Icon({
+    redIcon = new L.Icon({
       iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-red.png',
       shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
       iconSize: [25, 41],
@@ -46,33 +56,55 @@ const RocketMapCard: Component<RocketMapCardProps> = (props) => {
       popupAnchor: [1, -34],
       shadowSize: [41, 41]
     });
+    rocketIconRef = rocketIcon;
 
-    L.marker([props.latitude, props.longitude], { icon: redIcon }).addTo(map)
-    currentMarker = L.marker([props.latitude, props.longitude], { icon: rocketIcon }).addTo(map);
-
-    // percorso 
-    trajectory = L.polyline([[props.latitude, props.longitude]], {
-      color: '#ef4444', 
-      weight: 3,        
-      opacity: 0.8,
-    }).addTo(map);
-
+    // Markers/trajectory are created lazily once a real position arrives --
+    // see the effect below -- not here, where props are still the zeroed
+    // placeholder sample.
   });
-  
 
+  function clearTrack() {
+    if (startMarker) { startMarker.remove(); startMarker = undefined; }
+    if (currentMarker) { currentMarker.remove(); currentMarker = undefined; }
+    if (trajectory) { trajectory.remove(); trajectory = undefined; }
+    needsAnchor = true;
+  }
+
+  // Flight switched: forget the old trail so the next position re-anchors
+  // fresh instead of drawing a line back to the previous flight's data.
+  createEffect(on(() => props.resetKey, () => {
+    clearTrack();
+  }, { defer: true }));
 
   createEffect(() => {
     const lat = props.latitude;
     const long = props.longitude;
+    if (!map) return;
 
-    if (map && currentMarker && trajectory) {
-        currentMarker.setLatLng([lat, long]);
-        trajectory.addLatLng([lat, long]);
-        
-        if (props.gpsFix) {
-            map.panTo([lat, long]);
-        }
-    
+    if (needsAnchor) {
+      // Only anchor on a real fix -- never on the (0, 0) placeholder, and
+      // never silently invent a trail for a flight with no GPS lock at all.
+      if (!props.gpsFix || !redIcon || !rocketIconRef) return;
+
+      startMarker = L.marker([lat, long], { icon: redIcon }).addTo(map);
+      currentMarker = L.marker([lat, long], { icon: rocketIconRef }).addTo(map);
+      trajectory = L.polyline([[lat, long]], {
+        color: '#ef4444',
+        weight: 3,
+        opacity: 0.8,
+      }).addTo(map);
+      map.setView([lat, long], 14);
+      needsAnchor = false;
+      return;
+    }
+
+    if (currentMarker && trajectory) {
+      currentMarker.setLatLng([lat, long]);
+      trajectory.addLatLng([lat, long]);
+
+      if (props.gpsFix) {
+        map.panTo([lat, long]);
+      }
     }
   });
 

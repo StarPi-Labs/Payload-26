@@ -2,6 +2,7 @@ import { Component, createSignal, onCleanup, onMount } from "solid-js";
 
 import { AtmosphericSample } from "../models/atmospheric-sample";
 import { FlightSummary } from "../models/ui/flight-selector-props";
+import { ModeTransition } from "../models/ui/timeline-scrubber-props";
 
 import AttitudeCard from "../components/AttitudeCard";
 import AtmosphereCard from "../components/AtmosphereCard";
@@ -26,6 +27,8 @@ const Dashboard: Component = () => {
         status: false,
 
         alt: 0,
+        altMsl: 0,
+        galt: 0,
         vvel: 0,
         hvel: 0,
         lat: 0,
@@ -50,6 +53,8 @@ const Dashboard: Component = () => {
     const [elapsedSec, setElapsedSec] = createSignal(0);
     const [durationSec, setDurationSec] = createSignal(0);
     const [isPlaying, setIsPlaying] = createSignal(false);
+    const [playbackSpeed, setPlaybackSpeed] = createSignal(1);
+    const [modeTransitions, setModeTransitions] = createSignal<ModeTransition[]>([]);
     // Bumped on every seek/flight switch so the rolling graphs drop their
     // buffered points instead of drawing a line back across the jump.
     const [graphResetKey, setGraphResetKey] = createSignal(0);
@@ -62,7 +67,7 @@ const Dashboard: Component = () => {
 
     const numericFields: Array<keyof AtmosphericSample> = [
         "roll", "pitch", "yaw",
-        "alt", "vvel", "hvel",
+        "alt", "altMsl", "galt", "vvel", "hvel",
         "lat", "long",
         "temp", "pres", "rh",
         "accelX", "accelY", "accelZ",
@@ -81,6 +86,8 @@ const Dashboard: Component = () => {
             status: pt.status ?? true,
 
             alt: pt.altitude ?? pt.alt ?? 0,
+            altMsl: pt.altitudeMSL ?? pt.altMsl ?? 0,
+            galt: pt.gpsAlt ?? pt.galt ?? 0,
             vvel: pt.velocity ?? pt.vvel ?? 0,
             hvel: pt.horizontalVelocity ?? pt.hvel ?? 0,
             lat: pt.gpsLat ?? pt.lat ?? 0,
@@ -180,7 +187,7 @@ const Dashboard: Component = () => {
             playbackRaf = undefined;
             return;
         }
-        const t = playAnchorSec + (now - playAnchorPerf) / 1000;
+        const t = playAnchorSec + ((now - playAnchorPerf) / 1000) * playbackSpeed();
         const end = durationSec();
 
         if (t >= end) {
@@ -234,6 +241,16 @@ const Dashboard: Component = () => {
         seek(elapsedSec() + deltaSec);
     }
 
+    function changeSpeed(newSpeed: number) {
+        // Re-anchor from the current position so the rate change takes
+        // effect immediately instead of retroactively over the old anchor.
+        if (isPlaying()) {
+            playAnchorPerf = performance.now();
+            playAnchorSec = elapsedSec();
+        }
+        setPlaybackSpeed(newSpeed);
+    }
+
     async function loadTelemetryForFlight(flightId: string) {
         try {
             const res = await fetch(`/api/flights/${flightId}/telemetry`);
@@ -258,6 +275,13 @@ const Dashboard: Component = () => {
             if (Number.isFinite(targetFromMeta) && targetFromMeta > 0) {
                 setTargetAltitude(targetFromMeta);
             }
+
+            const transitions: ModeTransition[] = Array.isArray(json?.meta?.modeTransitions)
+                ? json.meta.modeTransitions
+                    .map((t: any) => ({ time: Number(t.time), mode: String(t.mode) }))
+                    .filter((t: ModeTransition) => Number.isFinite(t.time))
+                : [];
+            setModeTransitions(transitions);
 
             frameSamples = data.map((pt: any) => mapTelemetryPointToSample(pt));
             const rawTimes = data.map((pt: any, i: number) => getPointTimeSeconds(pt, i));
@@ -299,6 +323,7 @@ const Dashboard: Component = () => {
         frameTimes = [];
         setElapsedSec(0);
         setDurationSec(0);
+        setModeTransitions([]);
         setGraphResetKey(k => k + 1);
 
         await Promise.all([
@@ -358,6 +383,9 @@ const Dashboard: Component = () => {
                             onPlayPause={togglePlayPause}
                             onSeek={seek}
                             onSkip={skip}
+                            speed={playbackSpeed()}
+                            onSpeedChange={changeSpeed}
+                            modeTransitions={modeTransitions()}
                         />
                     </div>
                 </div>
@@ -379,6 +407,8 @@ const Dashboard: Component = () => {
                 />
                 <NavigationCard
                     altitude={sample().alt}
+                    altitudeMSL={sample().altMsl}
+                    gpsAltitude={sample().galt}
                     verticalVelocity={sample().vvel}
                     horizontalVelocity={sample().hvel}
                     latitude={sample().lat}
@@ -445,6 +475,7 @@ const Dashboard: Component = () => {
                 latitude={sample().lat}
                 longitude={sample().long}
                 gpsFix={sample().gps}
+                resetKey={graphResetKey()}
             />
         </div>
 

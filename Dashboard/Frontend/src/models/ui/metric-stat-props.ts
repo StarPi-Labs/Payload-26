@@ -7,4 +7,7 @@ export interface MetricStatProps {
     precision?: number
     hint?: string
     class?: string
+    /** Small arrow shown next to the value, e.g. to indicate whether it's
+     * currently rising, falling, or holding steady. */
+    trend?: "up" | "down" | "flat"
 }

@@ -2,6 +2,8 @@ import { InertialSample } from "./inertial-sample"
 
 export interface AtmosphericSample extends InertialSample {
     alt: number
+    altMsl: number
+    galt: number
     vvel: number
     hvel: number
     lat: number
