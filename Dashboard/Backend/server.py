@@ -149,6 +149,12 @@ def parse_sensor_file_with_meta(file_path):
                 'pitch': float(parts[15]) if len(parts) > 15 else 0,
                 'roll': float(parts[16]) if len(parts) > 16 else 0,
                 'yaw': float(parts[17]) if len(parts) > 17 else 0,
+                # Appended after the original 18 columns -- older telemetry
+                # files without them just fall back to these defaults.
+                'gasResistance': float(parts[18]) if len(parts) > 18 else 0,
+                'busVoltage': float(parts[19]) if len(parts) > 19 else 0,
+                'current': float(parts[20]) if len(parts) > 20 else 0,
+                'power': float(parts[21]) if len(parts) > 21 else 0,
             }
             telemetry.append(data_point)
         except (ValueError, IndexError):
@@ -164,7 +170,7 @@ def parse_sensor_data(file_path):
     Expected format (one reading per line, comma or space separated):
     time,altitude,altitudeMSL,velocity,horizontalVelocity,acceleration,
     accelerationX,accelerationY,accelerationZ,temperature,pressure,humidity,
-    gpsLat,gpsLon,gpsAlt,pitch,roll,yaw
+    gpsLat,gpsLon,gpsAlt,pitch,roll,yaw,gasResistance,busVoltage,current,power
 
     Or with headers in first line. See SD-Parser/json2telemetry.py, which
     produces this format directly from a decoded flight capture.

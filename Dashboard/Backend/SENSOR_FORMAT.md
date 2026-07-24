@@ -5,10 +5,10 @@
 Your sensor data TXT file from the SD card should follow this format (comma-separated values):
 
 ```
-time,altitude,altitudeMSL,velocity,horizontalVelocity,acceleration,accelerationX,accelerationY,accelerationZ,temperature,pressure,humidity,gpsLat,gpsLon,gpsAlt,pitch,roll,yaw
-0.0,0,12,0,0,0,0,0,0,22.5,101.3,45,37.7749,-122.4194,15,0,0,0
-0.1,5,17,10,2,9.8,9.5,0.5,0.3,22.4,101.2,44,37.7750,-122.4193,15,2,1,5
-0.2,15,27,25,5,12.5,12.0,1.2,0.8,22.3,101.1,44,37.7751,-122.4192,16,4,2,10
+time,altitude,altitudeMSL,velocity,horizontalVelocity,acceleration,accelerationX,accelerationY,accelerationZ,temperature,pressure,humidity,gpsLat,gpsLon,gpsAlt,pitch,roll,yaw,gasResistance,busVoltage,current,power
+0.0,0,12,0,0,0,0,0,0,22.5,101.3,45,37.7749,-122.4194,15,0,0,0,125000,3.78,410,1.55
+0.1,5,17,10,2,9.8,9.5,0.5,0.3,22.4,101.2,44,37.7750,-122.4193,15,2,1,5,124500,3.77,415,1.56
+0.2,15,27,25,5,12.5,12.0,1.2,0.8,22.3,101.1,44,37.7751,-122.4192,16,4,2,10,124800,3.76,420,1.58
 ...
 ```
 
@@ -34,6 +34,10 @@ time,altitude,altitudeMSL,velocity,horizontalVelocity,acceleration,accelerationX
 | pitch | Pitch angle | degrees |
 | roll | Roll angle | degrees |
 | yaw | Yaw angle | degrees |
+| gasResistance | BME680 VOC/air-quality gas sensor reading | ohms |
+| busVoltage | INA219 supply/battery voltage | V |
+| current | INA219 current draw | mA |
+| power | Power draw (busVoltage × current) | W |
 
 ## Metadata Lines
 

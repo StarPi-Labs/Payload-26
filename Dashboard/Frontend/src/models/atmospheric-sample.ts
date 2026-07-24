@@ -15,4 +15,8 @@ export interface AtmosphericSample extends InertialSample {
     accelX: number
     accelY: number
     accelZ: number
+    gasRes: number
+    busVolt: number
+    current: number
+    power: number
 }

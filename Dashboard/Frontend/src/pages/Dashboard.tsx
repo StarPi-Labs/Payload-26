@@ -13,6 +13,7 @@ import AccellerationGraphCard from "../components/AccellerationGraphCard";
 import AltitudeTracker from "../components/AltitudeTracker";
 import VideoPlayer from "../components/VideoPlayer";
 import RocketMapCard from "../components/RocketMapCard"
+import PowerGraphCard from "../components/PowerGraphCard"
 import FlightSelector from "../components/base/FlightSelector";
 import TimelineScrubber from "../components/base/TimelineScrubber";
 import { VideoSource } from "../models/videp-source";
@@ -40,6 +41,10 @@ const Dashboard: Component = () => {
         accelX: 0,
         accelY: 0,
         accelZ: 0,
+        gasRes: 0,
+        busVolt: 0,
+        current: 0,
+        power: 0,
     };
 
     const [sample, setSample] = createSignal<AtmosphericSample>(emptySample);
@@ -76,6 +81,7 @@ const Dashboard: Component = () => {
         "lat", "long",
         "temp", "pres", "rh",
         "accelX", "accelY", "accelZ",
+        "gasRes", "busVolt", "current", "power",
     ];
 
     function mapTelemetryPointToSample(pt: any): AtmosphericSample {
@@ -104,6 +110,10 @@ const Dashboard: Component = () => {
             accelX: pt.accelerationX ?? pt.accelX ?? 0,
             accelY: pt.accelerationY ?? pt.accelY ?? 0,
             accelZ: pt.accelerationZ ?? pt.accelZ ?? 0,
+            gasRes: pt.gasResistance ?? pt.gasRes ?? 0,
+            busVolt: pt.busVoltage ?? pt.busVolt ?? 0,
+            current: pt.current ?? 0,
+            power: pt.power ?? 0,
         };
     }
 
@@ -411,6 +421,8 @@ const Dashboard: Component = () => {
                     temperature={sample().temp}
                     pressure={sample().pres}
                     humidity={sample().rh}
+                    gasResistance={sample().gasRes}
+                    power={sample().power}
                 />
             </div>
 
@@ -467,12 +479,18 @@ const Dashboard: Component = () => {
             </div>
 
             {/* GRAFICO */}
-            <div class="grid gap-4">
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
                 <AccellerationGraphCard
                     time={sample().ts}
                     accelX={sample().accelX}
                     accelY={sample().accelY}
                     accelZ={sample().accelZ}
+                    class="w-full"
+                    resetKey={graphResetKey()}
+                />
+                <PowerGraphCard
+                    time={sample().ts}
+                    power={sample().power}
                     class="w-full"
                     resetKey={graphResetKey()}
                 />

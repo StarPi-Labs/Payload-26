@@ -7,10 +7,13 @@ backend expects (Dashboard/Backend/SENSOR_FORMAT.md):
 
     time,altitude,altitudeMSL,velocity,horizontalVelocity,acceleration,
     accelerationX,accelerationY,accelerationZ,temperature,pressure,humidity,
-    gpsLat,gpsLon,gpsAlt,pitch,roll,yaw
+    gpsLat,gpsLon,gpsAlt,pitch,roll,yaw,gasResistance,busVoltage,current,power
 
 This exact order matters -- Dashboard/Backend/server.py parses it
-positionally. If you add/reorder columns here, update server.py to match.
+positionally. If you add columns, APPEND them at the end (as gasResistance/
+busVoltage/current/power were) so older telemetry files without them still
+parse -- missing trailing columns just fall back to their defaults there.
+If you reorder existing columns, update server.py to match.
 
 Each raw frame only carries the fields for ONE sensor (e.g. an MPU frame has
 accelerationX/Y/Z but no temperature). This script walks the frames in time
@@ -36,6 +39,12 @@ still on the pad/bench) -- so the track does not appear to teleport in from
 Units are also converted to match SENSOR_FORMAT.md exactly:
   - acceleration, accelerationX/Y/Z : g (frameparser's unit) -> m/s^2
   - horizontalVelocity              : km/h (frameparser's unit) -> m/s
+
+Power draw is derived the same way altitude/velocity are -- frameparser only
+gives us the raw INA219 readings (busVoltage [V], current [mA]) per frame;
+power [W] = busVoltage * current / 1000 is computed here, forward-filled
+like everything else. gasResistance [ohm] (BME680 VOC/air-quality proxy) is
+passed through as-is once calibration constants are known (see CALIB frame).
 
 Note: 'pitch'/'roll'/'yaw' are passed through as-is. In the current protocol
 they are gyroscope angular RATES in deg/s (there is no attitude/orientation
@@ -71,6 +80,7 @@ SCHEMA_FIELDS = [
     "acceleration", "accelerationX", "accelerationY", "accelerationZ",
     "temperature", "pressure", "humidity",
     "gpsLat", "gpsLon", "gpsAlt", "pitch", "roll", "yaw",
+    "gasResistance", "busVoltage", "current", "power",
 ]
 
 # SD-Parser/json2telemetry.py -> ../Dashboard/Backend/data
@@ -140,6 +150,13 @@ def convert(frames, target_altitude=None, departure_altitude=0.0):
                 ground_pressure = d["pressure"]
         if "humidity" in d:
             state["humidity"] = d["humidity"]
+        if "gas_resistance" in d:
+            state["gasResistance"] = d["gas_resistance"]
+        if "current" in d:
+            # Same INA219 frame always carries both readings together.
+            state["busVoltage"] = d.get("bus_volts", state["busVoltage"])
+            state["current"] = d["current"]
+            state["power"] = state["busVoltage"] * state["current"] / 1000.0
         if "gpsLat" in d:
             state["gpsLat"] = d["gpsLat"]
             state["gpsLon"] = d["gpsLon"]
