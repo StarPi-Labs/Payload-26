@@ -20,60 +20,51 @@ const NavigationCard: Component<NavigationCardProps> = (props) => {
             subtitle="Altitude, velocities, coordinates"
             class={props.class}
         >
-            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3">
-                <MetricStat
-                    label="Altitude"
-                    value={props.altitude}
-                    unit="m"
-                    precision={1}
-                    trend={altitudeTrend()}
-                    hint="barometric, above pad"
-                    class="lg:col-span-2"
-                />
-                <MetricStat
-                    label="Altitude MSL"
-                    value={props.altitudeMSL}
-                    unit="m"
-                    precision={1}
-                    hint="barometric, above sea level"
-                    class="lg:col-span-2"
-                />
-                <MetricStat
-                    label="GPS Altitude"
-                    value={props.gpsAltitude}
-                    unit="m"
-                    precision={1}
-                    hint="from GNSS fix"
-                    class="lg:col-span-2"
-                />
+            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
                 <MetricStat
                     label="Vertical vel"
                     value={props.verticalVelocity}
                     unit="m/s"
                     precision={1}
-                    class="lg:col-span-2"
                 />
                 <MetricStat
                     label="Horizontal vel"
                     value={props.horizontalVelocity}
                     unit="m/s"
                     precision={1}
-                    class="lg:col-span-2"
                 />
-                <div class="lg:col-span-2" />
+                <MetricStat
+                    label="Altitude"
+                    value={props.altitude}
+                    unit="m"
+                    precision={1}
+                    trend={altitudeTrend()}
+                />
+                <MetricStat
+                    label="Altitude MSL"
+                    value={props.altitudeMSL}
+                    unit="m"
+                    precision={1}
+                />
+                <MetricStat
+                    label="GPS Altitude"
+                    value={props.gpsAltitude}
+                    unit="m"
+                    precision={1}
+                />
+            </div>
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <MetricStat
                     label="Latitude"
                     value={props.latitude}
                     unit="deg"
                     precision={5}
-                    class="lg:col-span-3"
                 />
                 <MetricStat
                     label="Longitude"
                     value={props.longitude}
                     unit="deg"
                     precision={5}
-                    class="lg:col-span-3"
                 />
             </div>
             <div class="flex flex-wrap gap-3">

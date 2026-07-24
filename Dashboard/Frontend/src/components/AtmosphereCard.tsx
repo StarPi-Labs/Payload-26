@@ -21,8 +21,8 @@ const AtmosphereCard: Component<AtmosphereCardProps> = (props) => {
                 <MetricStat label="Temperature" value={props.temperature} unit="C" precision={1} />
                 <MetricStat label="Pressure" value={props.pressure} unit="kPa" precision={1} />
                 <MetricStat label="Humidity" value={props.humidity} unit="%" precision={0} />
-                <MetricStat label="Gas" value={gasKOhm()} unit="kΩ" precision={1} hint="BME680 VOC/air quality" />
-                <MetricStat label="Power" value={props.power} unit="W" precision={2} hint="battery draw" />
+                <MetricStat label="Gas" value={gasKOhm()} unit="kΩ" precision={1} />
+                <MetricStat label="Power" value={props.power} unit="W" precision={2} />
             </div>
         </TelemetryCard>
     )

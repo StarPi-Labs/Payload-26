@@ -73,14 +73,15 @@ const AltitudeTracker: Component<AltitudeTrackerProps> = (rawProps) => {
                     </svg>
                 </div>
 
-                {/* FRECCIA GPS -- confronta l'altitudine GPS con quella barometrica (razzo) */}
+                {/* FRECCIA GPS -- sul lato destro, sotto la scritta "GPS" in header,
+                    cosi il confronto con il razzo (barometrico) e piu chiaro */}
                 <Show when={gpsPercent() !== null}>
                     <div
-                        class="absolute right-full mr-1 flex items-center pointer-events-none transition-all duration-500 ease-out"
+                        class="absolute left-full ml-1 flex items-center pointer-events-none transition-all duration-500 ease-out"
                         style={{ bottom: `calc(${gpsPercent()}% - 6px)` }}
                         title={`GPS altitude: ${props.gpsAltitude?.toFixed(0)}m`}
                     >
-                        <div class="w-0 h-0 border-y-[6px] border-y-transparent border-l-[8px] border-l-sky-400"></div>
+                        <div class="w-0 h-0 border-y-[6px] border-y-transparent border-r-[8px] border-r-sky-400"></div>
                     </div>
                 </Show>
 
