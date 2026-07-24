@@ -1,4 +1,4 @@
-import { Component, createMemo, mergeProps } from "solid-js";
+import { Component, createMemo, mergeProps, Show } from "solid-js";
 import { AltitudeTrackerProps } from "../models/ui/altitude-tracker-props";
 
 const AltitudeTracker: Component<AltitudeTrackerProps> = (rawProps) => {
@@ -15,6 +15,12 @@ const AltitudeTracker: Component<AltitudeTrackerProps> = (rawProps) => {
         const clamped = Math.max(0, Math.min(props.maxAltitude, props.targetAltitude));
         return (clamped / props.maxAltitude) * 100;
     });
+    const gpsPercent = createMemo(() => {
+        const v = props.gpsAltitude;
+        if (v === undefined || v === null) return null;
+        const clamped = Math.max(0, Math.min(props.maxAltitude, v));
+        return (clamped / props.maxAltitude) * 100;
+    });
 
     return (
         <div class={`flex flex-col items-center justify-between bg-base-300/30 border border-base-content/10 rounded-2xl p-6 ${props.class ?? ""}`}>
@@ -25,6 +31,12 @@ const AltitudeTracker: Component<AltitudeTrackerProps> = (rawProps) => {
                     <span class="text-base-content/50 uppercase text-xs">Current</span>
                     <span class="text-lg text-primary">{props.currentAltitude.toFixed(0)}m</span>
                 </div>
+                <Show when={gpsPercent() !== null}>
+                    <div class="flex flex-col items-end">
+                        <span class="text-base-content/50 uppercase text-xs">GPS</span>
+                        <span class="text-lg text-sky-400">{props.gpsAltitude!.toFixed(0)}m</span>
+                    </div>
+                </Show>
             </div>
 
             {/* BARRA VERTICALE */}
@@ -60,6 +72,17 @@ const AltitudeTracker: Component<AltitudeTrackerProps> = (rawProps) => {
                         <path d="M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5" />
                     </svg>
                 </div>
+
+                {/* FRECCIA GPS -- confronta l'altitudine GPS con quella barometrica (razzo) */}
+                <Show when={gpsPercent() !== null}>
+                    <div
+                        class="absolute right-full mr-1 flex items-center pointer-events-none transition-all duration-500 ease-out"
+                        style={{ bottom: `calc(${gpsPercent()}% - 6px)` }}
+                        title={`GPS altitude: ${props.gpsAltitude?.toFixed(0)}m`}
+                    >
+                        <div class="w-0 h-0 border-y-[6px] border-y-transparent border-l-[8px] border-l-sky-400"></div>
+                    </div>
+                </Show>
 
             </div>
         </div>

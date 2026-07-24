@@ -313,6 +313,7 @@ def get_telemetry(flight_id):
     # Combine all telemetry files
     all_data = []
     target_altitude = None
+    departure_altitude = None
     t0 = None
     t0_epoch_ms = None
     mode_transitions = []
@@ -322,6 +323,8 @@ def get_telemetry(flight_id):
             data, meta = parse_sensor_file_with_meta(file_path)
             if target_altitude is None and meta.get('targetAltitude') is not None:
                 target_altitude = meta.get('targetAltitude')
+            if departure_altitude is None and meta.get('departureAltitude') is not None:
+                departure_altitude = meta.get('departureAltitude')
             if t0 is None and meta.get('t0') is not None:
                 t0 = meta.get('t0')
             if t0_epoch_ms is None and meta.get('t0EpochMs') is not None:
@@ -339,6 +342,7 @@ def get_telemetry(flight_id):
         'data': all_data,
         'meta': {
             'targetAltitude': target_altitude,
+            'departureAltitude': departure_altitude,
             't0': t0,
             't0EpochMs': t0_epoch_ms,
             'modeTransitions': mode_transitions,

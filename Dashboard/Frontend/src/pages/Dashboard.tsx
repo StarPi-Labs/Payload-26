@@ -49,6 +49,7 @@ const Dashboard: Component = () => {
 
     const [sample, setSample] = createSignal<AtmosphericSample>(emptySample);
     const [targetAltitude, setTargetAltitude] = createSignal(1200);
+    const [departureAltitude, setDepartureAltitude] = createSignal(0);
     const [videoSources, setVideoSources] = createSignal<VideoSource[]>([]);
     const [t0EpochMs, setT0EpochMs] = createSignal<number | null>(null);
 
@@ -273,6 +274,7 @@ const Dashboard: Component = () => {
             const json = await res.json();
             const data = json.data || [];
             const targetFromMeta = Number(json?.meta?.targetAltitude);
+            const departureFromMeta = Number(json?.meta?.departureAltitude);
             const t0EpochFromMeta = Number(json?.meta?.t0EpochMs);
             const t0IsoFromMeta = typeof json?.meta?.t0 === "string" ? json.meta.t0 : null;
 
@@ -290,6 +292,8 @@ const Dashboard: Component = () => {
             if (Number.isFinite(targetFromMeta) && targetFromMeta > 0) {
                 setTargetAltitude(targetFromMeta);
             }
+            // 0 is a valid departure altitude (sea-level launch), unlike target.
+            setDepartureAltitude(Number.isFinite(departureFromMeta) ? departureFromMeta : 0);
 
             const transitions: ModeTransition[] = Array.isArray(json?.meta?.modeTransitions)
                 ? json.meta.modeTransitions
@@ -340,6 +344,7 @@ const Dashboard: Component = () => {
         setElapsedSec(0);
         setDurationSec(0);
         setModeTransitions([]);
+        setDepartureAltitude(0);
         setCanPlay(false);
         setGraphResetKey(k => k + 1);
 
@@ -409,22 +414,24 @@ const Dashboard: Component = () => {
             </div>
 
             {/* DATI METRICI */}
-            <div class="grid grid-cols-1 xl:grid-cols-2 gap-4">
-                <AttitudeCard
-                    roll={sample().roll}
-                    pitch={sample().pitch}
-                    yaw={sample().yaw}
-                    status={sample().status}
-                    timestampLabel={timestampLabel()}
-                />
-                <AtmosphereCard
-                    temperature={sample().temp}
-                    pressure={sample().pres}
-                    humidity={sample().rh}
-                    gasResistance={sample().gasRes}
-                    power={sample().power}
-                />
-            </div>
+            <AttitudeCard
+                roll={sample().roll}
+                pitch={sample().pitch}
+                yaw={sample().yaw}
+                accelX={sample().accelX}
+                accelY={sample().accelY}
+                accelZ={sample().accelZ}
+                status={sample().status}
+                timestampLabel={timestampLabel()}
+            />
+
+            <AtmosphereCard
+                temperature={sample().temp}
+                pressure={sample().pres}
+                humidity={sample().rh}
+                gasResistance={sample().gasRes}
+                power={sample().power}
+            />
 
             <NavigationCard
                 altitude={sample().alt}
@@ -471,6 +478,7 @@ const Dashboard: Component = () => {
                         currentAltitude={sample().alt}
                         targetAltitude={targetAltitude()}
                         maxAltitude={Math.max(targetAltitude(), 100)}
+                        gpsAltitude={sample().gps ? sample().galt - departureAltitude() : undefined}
                         class="w-full sm:w-28 shrink-0 h-[350px] sm:h-auto"
                     />
 
