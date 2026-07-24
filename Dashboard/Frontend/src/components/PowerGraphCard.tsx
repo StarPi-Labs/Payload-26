@@ -4,11 +4,8 @@ import BaseGraphCard from "./base/GraphCard";
 
 const PowerGraphCard: Component<PowerGraphCardProps> = (props) => {
     const [showPower, setShowPower] = createSignal(true);
-    // Off by default: voltage (~V) and current (~A) share the same axis as
-    // power (~W) here, so all three at once can visually flatten each other
-    // out -- toggle them on to inspect one at a time.
-    const [showVoltage, setShowVoltage] = createSignal(false);
-    const [showCurrent, setShowCurrent] = createSignal(false);
+    const [showVoltage, setShowVoltage] = createSignal(true);
+    const [showCurrent, setShowCurrent] = createSignal(true);
 
     // Current is carried in mA everywhere else in the app; convert to A here
     // so its magnitude sits closer to power/voltage on the shared axis.
