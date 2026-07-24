@@ -54,7 +54,10 @@ NOTE:
 PACKET_DEFS = {
     PACKET_TYPE_MPU6050:  {'name': 'MPU6050',   'fmt': '<7h', 'size': 14},
     PACKET_TYPE_BME680:   {'name': 'BME680',    'fmt': '<8B', 'size': 8},   # RAW press(3) temp(3) hum(2)
-    PACKET_TYPE_GPS:      {'name': 'MQ10',      'fmt': '<c10s10s10s11sc12sc4s8sx', 'size': 69},
+    # Firmware sends sizeof(struct GPSInfo) - 1 = 68 bytes (the struct's last
+    # field, 'available', is bookkeeping-only and deliberately excluded from
+    # the wire). No trailing pad byte -- there is nothing extra to consume.
+    PACKET_TYPE_GPS:      {'name': 'MQ10',      'fmt': '<c10s10s10s11sc12sc4s8s', 'size': 68},
     PACKET_TYPE_INA219:   {'name': 'INA219',    'fmt': '<2h', 'size': 4},
     PACKET_TYPE_SYSSTATE: {'name': 'SYSSTATE',  'fmt': '<B', 'size': 1},    # flight mode (1 byte)
     PACKET_TYPE_GAS:      {'name': 'GAS',       'fmt': '<2B', 'size': 2},   # RAW gas_r_msb, gas_r_lsb
@@ -361,8 +364,6 @@ def parse_frame_stream_bin(buffer):
         )
         
         if packet_type == PACKET_TYPE_GPS: # GPS (ASCII)
-            # (the firmware sends one trailing byte after the parsed fields;
-            #  the 'x' pad in the fmt consumes it)
             proc_gps(data[-1], payload_tuple)
 
         elif packet_type == PACKET_TYPE_CALIB: # calibration constants ('<49s' -> one bytes blob)

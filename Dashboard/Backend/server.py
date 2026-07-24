@@ -38,6 +38,7 @@ def parse_sensor_file_with_meta(file_path):
     telemetry = []
     meta = {
         'targetAltitude': None,
+        'departureAltitude': None,
         't0': None,
         't0EpochMs': None,
     }
@@ -62,6 +63,11 @@ def parse_sensor_file_with_meta(file_path):
                 if key == 'targetAltitude':
                     try:
                         meta['targetAltitude'] = float(value)
+                    except ValueError:
+                        pass
+                elif key == 'departureAltitude':
+                    try:
+                        meta['departureAltitude'] = float(value)
                     except ValueError:
                         pass
                 elif key in ('t0', 'startTime'):
@@ -113,20 +119,22 @@ def parse_sensor_file_with_meta(file_path):
             data_point = {
                 'time': float(parts[0]) if len(parts) > 0 else i * 0.1,
                 'altitude': float(parts[1]) if len(parts) > 1 else 0,
-                'velocity': float(parts[2]) if len(parts) > 2 else 0,
-                'horizontalVelocity': float(parts[3]) if len(parts) > 3 else 0,
-                'acceleration': float(parts[4]) if len(parts) > 4 else 0,
-                'accelerationX': float(parts[5]) if len(parts) > 5 else 0,
-                'accelerationY': float(parts[6]) if len(parts) > 6 else 0,
-                'accelerationZ': float(parts[7]) if len(parts) > 7 else 0,
-                'temperature': float(parts[8]) if len(parts) > 8 else 20,
-                'pressure': float(parts[9]) if len(parts) > 9 else 101.3,
-                'humidity': float(parts[10]) if len(parts) > 10 else 50,
-                'gpsLat': float(parts[11]) if len(parts) > 11 else 0,
-                'gpsLon': float(parts[12]) if len(parts) > 12 else 0,
-                'pitch': float(parts[13]) if len(parts) > 13 else 0,
-                'roll': float(parts[14]) if len(parts) > 14 else 0,
-                'yaw': float(parts[15]) if len(parts) > 15 else 0,
+                'altitudeMSL': float(parts[2]) if len(parts) > 2 else 0,
+                'velocity': float(parts[3]) if len(parts) > 3 else 0,
+                'horizontalVelocity': float(parts[4]) if len(parts) > 4 else 0,
+                'acceleration': float(parts[5]) if len(parts) > 5 else 0,
+                'accelerationX': float(parts[6]) if len(parts) > 6 else 0,
+                'accelerationY': float(parts[7]) if len(parts) > 7 else 0,
+                'accelerationZ': float(parts[8]) if len(parts) > 8 else 0,
+                'temperature': float(parts[9]) if len(parts) > 9 else 20,
+                'pressure': float(parts[10]) if len(parts) > 10 else 101.3,
+                'humidity': float(parts[11]) if len(parts) > 11 else 50,
+                'gpsLat': float(parts[12]) if len(parts) > 12 else 0,
+                'gpsLon': float(parts[13]) if len(parts) > 13 else 0,
+                'gpsAlt': float(parts[14]) if len(parts) > 14 else 0,
+                'pitch': float(parts[15]) if len(parts) > 15 else 0,
+                'roll': float(parts[16]) if len(parts) > 16 else 0,
+                'yaw': float(parts[17]) if len(parts) > 17 else 0,
             }
             telemetry.append(data_point)
         except (ValueError, IndexError):
@@ -140,9 +148,12 @@ def parse_sensor_data(file_path):
     """
     Parse sensor data from a TXT file.
     Expected format (one reading per line, comma or space separated):
-    timestamp,altitude,velocity,acceleration,temperature,pressure,humidity,gps_lat,gps_lon,pitch,roll,yaw
-    
-    Or with headers in first line.
+    time,altitude,altitudeMSL,velocity,horizontalVelocity,acceleration,
+    accelerationX,accelerationY,accelerationZ,temperature,pressure,humidity,
+    gpsLat,gpsLon,gpsAlt,pitch,roll,yaw
+
+    Or with headers in first line. See SD-Parser/json2telemetry.py, which
+    produces this format directly from a decoded flight capture.
     """
     telemetry, _ = parse_sensor_file_with_meta(file_path)
     return telemetry

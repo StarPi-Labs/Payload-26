@@ -14,10 +14,9 @@ def hardware_handler(src_stream_port, output_file, sample_sz):
         print(f"Stream type {src_stream_port} not supported.")
         return
 
-    dst = open(output_file, "w")
     remainder = b''
-    counter = 0;
-    dst.write("[")
+    packets = []
+    counter = 0
 
     while True:
       try:
@@ -27,10 +26,7 @@ def hardware_handler(src_stream_port, output_file, sample_sz):
 
         available = remainder + available
         remainder, new_data = frameparser.parse_frame_stream_bin(available)
-
-        for packet in new_data:
-            json_dumps = json.dumps(packet)
-            dst.write(f"{json_dumps},")
+        packets.extend(new_data)
 
         if sample_sz > 0:
             counter += 1
@@ -52,11 +48,13 @@ def hardware_handler(src_stream_port, output_file, sample_sz):
         print(f"[!] Bad data chunk: {available}")
         remainder = b''
         continue
-    
-    dst.write("{}]")
-    print("Closing files...")
+
+    # Pretty-printed (one field per line), not a single giant minified line.
+    with open(output_file, "w") as dst:
+        json.dump(packets, dst, indent=2)
+
+    print(f"Closing files... ({len(packets)} packets written)")
     src.close()
-    dst.close()
 
 #-- User Input --#
 args = argparse.ArgumentParser()
