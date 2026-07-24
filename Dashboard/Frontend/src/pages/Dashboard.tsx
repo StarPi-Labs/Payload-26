@@ -55,6 +55,11 @@ const Dashboard: Component = () => {
     const [isPlaying, setIsPlaying] = createSignal(false);
     const [playbackSpeed, setPlaybackSpeed] = createSignal(1);
     const [modeTransitions, setModeTransitions] = createSignal<ModeTransition[]>([]);
+    // frameSamples itself is a plain array (mutated directly, not through a
+    // setter) so JSX can't react to it -- this signal is the reactive proxy
+    // for "is there enough data to scrub/play", kept in sync wherever
+    // frameSamples is reassigned.
+    const [canPlay, setCanPlay] = createSignal(false);
     // Bumped on every seek/flight switch so the rolling graphs drop their
     // buffered points instead of drawing a line back across the jump.
     const [graphResetKey, setGraphResetKey] = createSignal(0);
@@ -289,6 +294,7 @@ const Dashboard: Component = () => {
             const t0 = rawTimes.length ? rawTimes[0] : 0;
             frameTimes = rawTimes.map((t: number) => t - t0);
             setDurationSec(frameTimes.length ? frameTimes[frameTimes.length - 1] : 0);
+            setCanPlay(frameSamples.length >= 2);
         } catch (e) {
             // ignore network errors silently for now
         }
@@ -324,6 +330,7 @@ const Dashboard: Component = () => {
         setElapsedSec(0);
         setDurationSec(0);
         setModeTransitions([]);
+        setCanPlay(false);
         setGraphResetKey(k => k + 1);
 
         await Promise.all([
@@ -379,7 +386,7 @@ const Dashboard: Component = () => {
                             elapsedSeconds={elapsedSec()}
                             durationSeconds={durationSec()}
                             isPlaying={isPlaying()}
-                            disabled={frameSamples.length < 2}
+                            disabled={!canPlay()}
                             onPlayPause={togglePlayPause}
                             onSeek={seek}
                             onSkip={skip}
@@ -392,7 +399,7 @@ const Dashboard: Component = () => {
             </div>
 
             {/* DATI METRICI */}
-            <div class="grid grid-cols-1 xl:grid-cols-3 gap-4">
+            <div class="grid grid-cols-1 xl:grid-cols-2 gap-4">
                 <AttitudeCard
                     roll={sample().roll}
                     pitch={sample().pitch}
@@ -405,17 +412,18 @@ const Dashboard: Component = () => {
                     pressure={sample().pres}
                     humidity={sample().rh}
                 />
-                <NavigationCard
-                    altitude={sample().alt}
-                    altitudeMSL={sample().altMsl}
-                    gpsAltitude={sample().galt}
-                    verticalVelocity={sample().vvel}
-                    horizontalVelocity={sample().hvel}
-                    latitude={sample().lat}
-                    longitude={sample().long}
-                    gpsFix={sample().gps}
-                />
             </div>
+
+            <NavigationCard
+                altitude={sample().alt}
+                altitudeMSL={sample().altMsl}
+                gpsAltitude={sample().galt}
+                verticalVelocity={sample().vvel}
+                horizontalVelocity={sample().hvel}
+                latitude={sample().lat}
+                longitude={sample().long}
+                gpsFix={sample().gps}
+            />
 
             <div class="grid grid-cols-1 lg:grid-cols-4 gap-4">
                 {/* VIDEO PLAYER */}
