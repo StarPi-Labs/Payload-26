@@ -30,6 +30,13 @@ const GraphCard: Component<GraphCardProps> = (props) => {
         setTick(t => t + 1);
     }, { defer: true }));
 
+    // Timeline scrubbed/seeked or flight switched: the old points would draw
+    // a line back to a discontinuous time, so start the rolling window over.
+    createEffect(on(() => props.resetKey, () => {
+        buffer = new CircularBuffer(props.maxPoints || 100);
+        setTick(t => t + 1);
+    }, { defer: true }));
+
     const stats = createMemo(() => {
         tick();
         if (buffer.length === 0 || !props.lines.length) return null;

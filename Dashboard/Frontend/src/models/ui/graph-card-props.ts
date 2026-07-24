@@ -10,4 +10,8 @@ export interface GraphCardProps {
     lines: GraphLineConfig[];
     controls?: JSX.Element;
     class?: string;
+    /** Change this value (e.g. a counter) to clear the rolling point buffer.
+     * Use when the timeline is scrubbed/seeked, so the graph doesn't draw a
+     * line back to wherever it was before the jump. */
+    resetKey?: any;
 }

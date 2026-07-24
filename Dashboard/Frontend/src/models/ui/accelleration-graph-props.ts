@@ -4,4 +4,5 @@ export interface AccellerationGraphCardProps {
     accelY?: number;
     accelZ?: number;
     class?: string;
+    resetKey?: any;
 }

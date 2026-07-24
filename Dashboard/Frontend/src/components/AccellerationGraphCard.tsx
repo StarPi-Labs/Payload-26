@@ -16,6 +16,7 @@ const AccellerationGraphCard: Component<AccellerationGraphCardProps> = (props) =
                 maxPoints={100}
                 xKey="time"
                 class="w-full"
+                resetKey={props.resetKey}
 
                 controls={
                     <>

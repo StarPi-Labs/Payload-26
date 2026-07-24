@@ -13,6 +13,7 @@ const AltitudeGraphCard: Component<AltitudeGraphCardProps> = (props) => {
                 maxPoints={100}
                 xKey="time"
                 class="w-full"
+                resetKey={props.resetKey}
                 lines={[
                     ...(showAltitude() ? [{ key: "altitude", label: "Altitude", color: "#ab2b8dff", legendClass: "bg-blue-500" }] : []),
                 ]}

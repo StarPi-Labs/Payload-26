@@ -1,6 +1,7 @@
 import { Component, createSignal, onCleanup, onMount } from "solid-js";
 
 import { AtmosphericSample } from "../models/atmospheric-sample";
+import { FlightSummary } from "../models/ui/flight-selector-props";
 
 import AttitudeCard from "../components/AttitudeCard";
 import AtmosphereCard from "../components/AtmosphereCard";
@@ -11,11 +12,12 @@ import AccellerationGraphCard from "../components/AccellerationGraphCard";
 import AltitudeTracker from "../components/AltitudeTracker";
 import VideoPlayer from "../components/VideoPlayer";
 import RocketMapCard from "../components/RocketMapCard"
+import FlightSelector from "../components/base/FlightSelector";
+import TimelineScrubber from "../components/base/TimelineScrubber";
 import { VideoSource } from "../models/videp-source";
 
 const Dashboard: Component = () => {
 
-    // Use only server telemetry (polling). Map server telemetry points to AtmosphericSample.
     const emptySample: AtmosphericSample = {
         ts: Date.now(),
         roll: 0,
@@ -42,9 +44,21 @@ const Dashboard: Component = () => {
     const [videoSources, setVideoSources] = createSignal<VideoSource[]>([]);
     const [t0EpochMs, setT0EpochMs] = createSignal<number | null>(null);
 
+    const [flights, setFlights] = createSignal<FlightSummary[]>([]);
+    const [activeFlightId, setActiveFlightId] = createSignal<string | null>(null);
+
+    const [elapsedSec, setElapsedSec] = createSignal(0);
+    const [durationSec, setDurationSec] = createSignal(0);
+    const [isPlaying, setIsPlaying] = createSignal(false);
+    // Bumped on every seek/flight switch so the rolling graphs drop their
+    // buffered points instead of drawing a line back across the jump.
+    const [graphResetKey, setGraphResetKey] = createSignal(0);
+
     let playbackRaf: number | undefined = undefined;
-    let activeFlightId: string | null = null;
-    let telemetryFrames: any[] = [];
+    let playAnchorPerf = 0;   // performance.now() when playback last (re)started
+    let playAnchorSec = 0;    // elapsedSec() value at that anchor
+    let frameSamples: AtmosphericSample[] = [];
+    let frameTimes: number[] = [];
 
     const numericFields: Array<keyof AtmosphericSample> = [
         "roll", "pitch", "yaw",
@@ -104,7 +118,6 @@ const Dashboard: Component = () => {
         const out: AtmosphericSample = {
             ...current,
             ts: playbackTs,
-            // Keep non-numeric states as step values.
             gps: current.gps,
             status: current.status,
         };
@@ -120,10 +133,110 @@ const Dashboard: Component = () => {
         return out;
     }
 
-    async function loadTelemetryForActiveFlight() {
-        if (!activeFlightId) return;
+    function getPointTimeSeconds(pt: any, fallbackIndex: number): number {
+        const t = Number(pt?.time);
+        if (Number.isFinite(t) && t >= 0) return t;
+        return fallbackIndex * 0.1;
+    }
+
+    function findSegmentIndex(tSec: number): number {
+        let i = 0;
+        while (i < frameTimes.length - 2 && tSec >= frameTimes[i + 1]) {
+            i++;
+        }
+        return i;
+    }
+
+    function computeSampleAtTime(tSec: number): AtmosphericSample {
+        if (frameSamples.length === 0) return emptySample;
+        if (frameSamples.length === 1) return frameSamples[0];
+
+        const last = frameTimes[frameTimes.length - 1];
+        const clamped = Math.min(last, Math.max(0, tSec));
+        const i = findSegmentIndex(clamped);
+        const t0 = frameTimes[i];
+        const t1 = frameTimes[i + 1];
+        const denom = Math.max(0.000001, t1 - t0);
+        const u = (clamped - t0) / denom;
+
+        const prev = frameSamples[Math.max(0, i - 1)];
+        const current = frameSamples[i];
+        const next = frameSamples[i + 1];
+        const next2 = frameSamples[Math.min(frameSamples.length - 1, i + 2)];
+
+        const epoch = t0EpochMs() ?? Date.now();
+        return interpolateSampleCurve(prev, current, next, next2, u, epoch + clamped * 1000);
+    }
+
+    function clearPlaybackTimers() {
+        if (playbackRaf) {
+            cancelAnimationFrame(playbackRaf);
+            playbackRaf = undefined;
+        }
+    }
+
+    function tick(now: number) {
+        if (!isPlaying()) {
+            playbackRaf = undefined;
+            return;
+        }
+        const t = playAnchorSec + (now - playAnchorPerf) / 1000;
+        const end = durationSec();
+
+        if (t >= end) {
+            setElapsedSec(end);
+            setSample(computeSampleAtTime(end));
+            setIsPlaying(false);
+            playbackRaf = undefined;
+            return;
+        }
+
+        setElapsedSec(t);
+        setSample(computeSampleAtTime(t));
+        playbackRaf = requestAnimationFrame(tick);
+    }
+
+    function play() {
+        if (frameSamples.length < 2) return;
+        // Restart from the beginning if playback had already reached the end.
+        if (elapsedSec() >= durationSec()) {
+            setElapsedSec(0);
+        }
+        playAnchorPerf = performance.now();
+        playAnchorSec = elapsedSec();
+        setIsPlaying(true);
+        clearPlaybackTimers();
+        playbackRaf = requestAnimationFrame(tick);
+    }
+
+    function pause() {
+        setIsPlaying(false);
+        clearPlaybackTimers();
+    }
+
+    function togglePlayPause() {
+        if (isPlaying()) pause(); else play();
+    }
+
+    function seek(tSec: number) {
+        const clamped = Math.min(durationSec(), Math.max(0, tSec));
+        setElapsedSec(clamped);
+        setSample(computeSampleAtTime(clamped));
+        setGraphResetKey(k => k + 1);
+        if (isPlaying()) {
+            // Keep playing, just from the new position.
+            playAnchorPerf = performance.now();
+            playAnchorSec = clamped;
+        }
+    }
+
+    function skip(deltaSec: number) {
+        seek(elapsedSec() + deltaSec);
+    }
+
+    async function loadTelemetryForFlight(flightId: string) {
         try {
-            const res = await fetch(`/api/flights/${activeFlightId}/telemetry`);
+            const res = await fetch(`/api/flights/${flightId}/telemetry`);
             if (!res.ok) return;
             const json = await res.json();
             const data = json.data || [];
@@ -138,23 +251,28 @@ const Dashboard: Component = () => {
                 if (Number.isFinite(parsed)) {
                     setT0EpochMs(parsed);
                 }
+            } else {
+                setT0EpochMs(null);
             }
 
             if (Number.isFinite(targetFromMeta) && targetFromMeta > 0) {
                 setTargetAltitude(targetFromMeta);
             }
-            if (data.length) {
-                telemetryFrames = data;
-            }
+
+            frameSamples = data.map((pt: any) => mapTelemetryPointToSample(pt));
+            const rawTimes = data.map((pt: any, i: number) => getPointTimeSeconds(pt, i));
+            // Normalize to start at 0 regardless of the source timestamps.
+            const t0 = rawTimes.length ? rawTimes[0] : 0;
+            frameTimes = rawTimes.map((t: number) => t - t0);
+            setDurationSec(frameTimes.length ? frameTimes[frameTimes.length - 1] : 0);
         } catch (e) {
             // ignore network errors silently for now
         }
     }
 
-    async function loadVideosForActiveFlight() {
-        if (!activeFlightId) return;
+    async function loadVideosForFlight(flightId: string) {
         try {
-            const res = await fetch(`/api/flights/${activeFlightId}/videos`);
+            const res = await fetch(`/api/flights/${flightId}/videos`);
             if (!res.ok) return;
             const json = await res.json();
             const urls: string[] = json.urls || [];
@@ -172,75 +290,27 @@ const Dashboard: Component = () => {
         }
     }
 
-    function getPointTimeSeconds(pt: any, fallbackIndex: number): number {
-        const t = Number(pt?.time);
-        if (Number.isFinite(t) && t >= 0) return t;
-        return fallbackIndex * 0.1;
-    }
+    async function selectFlight(flightId: string) {
+        if (!flightId || flightId === activeFlightId()) return;
+        pause();
+        setActiveFlightId(flightId);
+        setVideoSources([]);
+        frameSamples = [];
+        frameTimes = [];
+        setElapsedSec(0);
+        setDurationSec(0);
+        setGraphResetKey(k => k + 1);
 
-    function clearPlaybackTimers() {
-        if (playbackRaf) {
-            cancelAnimationFrame(playbackRaf);
-            playbackRaf = undefined;
+        await Promise.all([
+            loadVideosForFlight(flightId),
+            loadTelemetryForFlight(flightId),
+        ]);
+
+        // Land on the first frame, paused -- let the user press Play or drag
+        // the scrubber rather than immediately replaying the whole flight.
+        if (frameSamples.length) {
+            setSample(computeSampleAtTime(0));
         }
-    }
-
-    function startPlaybackOnce() {
-        if (telemetryFrames.length < 2) {
-            if (telemetryFrames.length === 1) {
-                setSample(mapTelemetryPointToSample(telemetryFrames[0]));
-            }
-            return;
-        }
-
-        clearPlaybackTimers();
-
-        const frameSamples = telemetryFrames.map((pt: any) => mapTelemetryPointToSample(pt));
-        const frameTimes = telemetryFrames.map((pt: any, i: number) => getPointTimeSeconds(pt, i));
-        const firstTime = frameTimes[0];
-        const lastTime = frameTimes[frameTimes.length - 1];
-        const totalDurationMs = Math.max(1, (lastTime - firstTime) * 1000);
-        const playbackEpoch = t0EpochMs() ?? Date.now();
-        const startPerf = performance.now();
-
-        const findSegmentIndex = (tSec: number): number => {
-            let i = 0;
-            while (i < frameTimes.length - 2 && tSec >= frameTimes[i + 1]) {
-                i++;
-            }
-            return i;
-        };
-
-        const animate = (now: number) => {
-            const elapsedMs = now - startPerf;
-            const elapsedSec = elapsedMs / 1000;
-            const tSec = firstTime + elapsedSec;
-
-            if (elapsedMs >= totalDurationMs) {
-                const last = frameSamples[frameSamples.length - 1];
-                setSample({ ...last, ts: playbackEpoch + totalDurationMs });
-                playbackRaf = undefined;
-                return;
-            }
-
-            const i = findSegmentIndex(tSec);
-            const t0 = frameTimes[i];
-            const t1 = frameTimes[i + 1];
-            const denom = Math.max(0.000001, t1 - t0);
-            const u = (tSec - t0) / denom;
-
-            const prev = frameSamples[Math.max(0, i - 1)];
-            const current = frameSamples[i];
-            const next = frameSamples[i + 1];
-            const next2 = frameSamples[Math.min(frameSamples.length - 1, i + 2)];
-
-            setSample(interpolateSampleCurve(prev, current, next, next2, u, playbackEpoch + elapsedMs));
-            playbackRaf = requestAnimationFrame(animate);
-        };
-
-        // exact first point
-        setSample({ ...frameSamples[0], ts: playbackEpoch });
-        playbackRaf = requestAnimationFrame(animate);
     }
 
     onMount(async () => {
@@ -248,14 +318,10 @@ const Dashboard: Component = () => {
             const res = await fetch('/api/flights');
             if (!res.ok) return;
             const json = await res.json();
-            const flights = json.flights || [];
-            if (flights.length === 0) return;
-            activeFlightId = flights[0].id;
-
-            // initial load, then replay once using telemetry time deltas
-            await loadVideosForActiveFlight();
-            await loadTelemetryForActiveFlight();
-            startPlaybackOnce();
+            const list: FlightSummary[] = json.flights || [];
+            setFlights(list);
+            if (list.length === 0) return;
+            await selectFlight(list[0].id);
         } catch (e) {
             // nothing
         }
@@ -272,8 +338,29 @@ const Dashboard: Component = () => {
 
     return (
         <div class="space-y-6">
-            <div class="flex flex-col gap-2">
-                <h1 class="text-2xl font-semibold">Dashboard</h1>
+            <div class="flex flex-col gap-4">
+                <div class="flex flex-wrap items-center justify-between gap-4">
+                    <h1 class="text-2xl font-semibold">Dashboard</h1>
+                    <FlightSelector
+                        flights={flights()}
+                        selectedId={activeFlightId()}
+                        onSelect={selectFlight}
+                    />
+                </div>
+
+                <div class="card bg-base-200/70 border border-base-300 shadow-sm">
+                    <div class="card-body py-3">
+                        <TimelineScrubber
+                            elapsedSeconds={elapsedSec()}
+                            durationSeconds={durationSec()}
+                            isPlaying={isPlaying()}
+                            disabled={frameSamples.length < 2}
+                            onPlayPause={togglePlayPause}
+                            onSeek={seek}
+                            onSkip={skip}
+                        />
+                    </div>
+                </div>
             </div>
 
             {/* DATI METRICI */}
@@ -309,7 +396,7 @@ const Dashboard: Component = () => {
                         loop={false}
                     />
                 </div>
-                
+
                 <div class="flex flex-col sm:flex-row gap-4 lg:col-span-2">
                     {/* SOTTO-COLONNA GRAFICI */}
                     <div class="flex flex-col gap-4 flex-1 w-full sm:w-0">
@@ -318,15 +405,17 @@ const Dashboard: Component = () => {
                             verticalVelocity={sample().vvel}
                             horizontalVelocity={sample().hvel}
                             class="w-full"
+                            resetKey={graphResetKey()}
                         />
 
                         <AltitudeGraphCard
                             time={sample().ts}
                             altitude={sample().alt}
                             class="w-full"
+                            resetKey={graphResetKey()}
                         />
                     </div>
-                    
+
                     {/* MINI COLONNA TRACKER ALTITUDINE */}
                     <AltitudeTracker
                         currentAltitude={sample().alt}
@@ -347,9 +436,10 @@ const Dashboard: Component = () => {
                     accelY={sample().accelY}
                     accelZ={sample().accelZ}
                     class="w-full"
+                    resetKey={graphResetKey()}
                 />
             </div>
-            
+
             {/* MAPPA */}
             <RocketMapCard
                 latitude={sample().lat}

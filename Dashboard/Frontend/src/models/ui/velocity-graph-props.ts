@@ -3,4 +3,5 @@ export interface VelocityGraphCardProps {
     verticalVelocity?: number;
     horizontalVelocity?: number;
     class?: string;
+    resetKey?: any;
 }
