@@ -491,6 +491,8 @@ const Dashboard: Component = () => {
                 <PowerGraphCard
                     time={sample().ts}
                     power={sample().power}
+                    voltage={sample().busVolt}
+                    current={sample().current}
                     class="w-full"
                     resetKey={graphResetKey()}
                 />
