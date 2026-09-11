@@ -1,0 +1,24 @@
+## Managed components for the Pi-LOG P4 live display.
+##
+## The BSP pulls in the MIPI-DSI panel driver, the GT911 touch controller and
+## the LVGL port for this exact board, so none of that has to be hand-rolled.
+## Pick the panel variant your kit shipped with in `idf.py menuconfig` under
+## "Board Support Package" - the wrong choice builds cleanly and then shows
+## nothing, which is a confusing way to lose an afternoon.
+dependencies:
+  idf: ">=5.4"
+
+  espressif/esp32_p4_function_ev_board:
+    version: "^5"
+
+  ## Wi-Fi/Bluetooth (and our custom-data channel) proxied to the on-board C6.
+  ## Must be version-compatible with the slave firmware flashed on the C6 -
+  ## see P4-Board/c6-slave-espnow/README.md.
+  espressif/esp_hosted:
+    version: "*"
+
+  espressif/esp_wifi_remote:
+    version: "*"
+
+  lvgl/lvgl:
+    version: "^9"

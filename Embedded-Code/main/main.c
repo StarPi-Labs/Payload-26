@@ -32,6 +32,8 @@
 #include "status_led.h"
 #include "health_monitoring.h"
 #include "flight_stats.h"
+#include "telemetry_net.h"
+#include "telemetry_espnow.h"
 
 /* ── Conditionally include sensor drivers ─────────────────── */
 #if CONFIG_ENABLE_I2C_BUS
@@ -355,9 +357,16 @@ void sysP2I_init(System *sys) {
         sys->record->boot_count++;
     }
 
-    /* Telemetry transport — wired UART now (BLE/ESP-NOW relay later). Init on
-     * every reset reason; on this target the "BT" bridge is a no-RF UART. */
+    /* Telemetry transport — wired UART now (LoRa relay later). Init on every
+     * reset reason; on this target the "BT" bridge is a no-RF UART. */
     bt_serial_init("StarPi-Telemetry");
+
+    /* Wireless mirror of the same stream: SoftAP + UDP broadcast, for the
+     * ESP32-P4 ground display. No-op unless enabled in menuconfig, and it
+     * returns false rather than aborting if the radio refuses to come up —
+     * a dead link must never take the flight computer with it. */
+    telemetry_net_init();
+    telemetry_espnow_init();
 
     ESP_LOGI(TAG, "╔══════════════════════════════════╗");
     ESP_LOGI(TAG, "║     Star-PI Payload  v2.0        ║");
@@ -498,7 +507,7 @@ void sysP2I_POST(System *sys){
 #endif
 
 #if CONFIG_ENABLE_SD_SPI
-    if (sys->health & (1 << SD_HEALTH)) {
+ysxx    if (sys->health & (1 << SD_HEALTH)) {
         sys->sd_ctxt.card = & sys->card;
         if (ESP_OK == sys_mount_spi_card(SD_PORT, SD_MOUNT_POINT, &sys->sd_ctxt.card)) {
             sys->health |= (1 << FILESYSTEM_HEALTH);

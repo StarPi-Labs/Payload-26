@@ -1,0 +1,10 @@
+CONFIG_IDF_TARGET="esp32c6"
+
+# CRITICAL: the console must go to UART0, not USB-Serial-JTAG.
+#
+# The C6 on the ESP32-P4-Function-EV-Board has no USB connector of its own —
+# it is reached through the PROG_C6 programming header, which carries UART0.
+# Leaving the C6 default (USB-Serial-JTAG) would send every log line to a
+# non-existent USB peripheral and the monitor would sit there blank, looking
+# exactly like "ESP-NOW received nothing".
+CONFIG_ESP_CONSOLE_UART_DEFAULT=y

@@ -1,0 +1,5 @@
+CONFIG_IDF_TARGET="esp32s3"
+
+# The DevKitC console lives on the USB-Serial-JTAG connector, matching how the
+# payload firmware is set up, so `idf.py monitor` works over the "USB" port.
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y

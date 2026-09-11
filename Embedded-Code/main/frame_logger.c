@@ -312,6 +312,8 @@ FILE *frame_logger_get_file(void)
 #include "esp_heap_caps.h"
 #include "esp_timer.h"
 #include "bt_serial_bridge.h"
+#include "telemetry_net.h"
+#include "telemetry_espnow.h"
 #include <stdbool.h>
 
 #define LOG_RING_CAP      (256 * 1024)  /* PSRAM circular buffer size */
@@ -450,6 +452,13 @@ static void log_sink(FILE *f, const uint8_t *buf, size_t len)
 {
     if (f) fwrite(buf, 1, len, f);
     else   bt_serial_write_chunk((uint8_t *)buf, (uint16_t)len);
+
+    /* Same bytes over the air as well, best-effort. Both return immediately and
+     * drop rather than blocking, so the SD path above is never gated on a
+     * radio. Each is a no-op unless enabled in menuconfig; enabling both is
+     * fine and sends the identical stream over each. */
+    telemetry_net_send(buf, len);
+    telemetry_espnow_send(buf, len);
 }
 
 void logging_task(void *args) {

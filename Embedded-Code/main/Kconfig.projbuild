@@ -52,6 +52,69 @@ menu "Star-PI Payload Configuration"
         help
             Log all sensors data to a binary file on the SD card (SD SPI)
 
+    comment "──── Live Telemetry Link (Wi-Fi) ────"
+
+    config ENABLE_TELEMETRY_NET
+        bool "Broadcast live telemetry over Wi-Fi (SoftAP + UDP)"
+        default n
+        help
+            Bring up a Wi-Fi access point on the payload and broadcast the same
+            framed byte stream the SD logger writes, as UDP datagrams. Any
+            client that joins the AP sees the identical packets: the ESP32-P4
+            ground display, or a PC running SD-Parser/udp_capture.py.
+
+            Best-effort by design. The SD card stays the authoritative recorder;
+            if the link cannot keep up, whole chunks are dropped rather than
+            stalling the logger, and the receiver resyncs on the next frame.
+
+            ESP-NOW is deliberately NOT used. The P4 ground display has no radio
+            of its own and borrows the on-board C6 through esp-hosted, whose
+            firmware supports station/SoftAP only — not ESP-NOW.
+
+    config TELEMETRY_NET_SSID
+        string "SoftAP SSID"
+        default "PiLOG-Telemetry"
+        depends on ENABLE_TELEMETRY_NET
+
+    config TELEMETRY_NET_PASSWORD
+        string "SoftAP password (under 8 characters means an open network)"
+        default "starpi2026"
+        depends on ENABLE_TELEMETRY_NET
+        help
+            WPA2 requires at least 8 characters. Anything shorter, including an
+            empty string, starts an open network instead — legitimate for a
+            field test where typing a password on a touchscreen is a nuisance.
+
+    config TELEMETRY_NET_CHANNEL
+        int "SoftAP channel"
+        default 6
+        range 1 13
+        depends on ENABLE_TELEMETRY_NET
+
+    config TELEMETRY_NET_PORT
+        int "UDP broadcast port"
+        default 5005
+        range 1024 65535
+        depends on ENABLE_TELEMETRY_NET
+
+    config ENABLE_TELEMETRY_ESPNOW
+        bool "Broadcast live telemetry over ESP-NOW"
+        default n
+        help
+            Broadcast the same framed byte stream the SD logger writes, as
+            ESP-NOW packets. The ground station is the ESP32-C6 on the
+            ESP32-P4-Function-EV-Board, running the bridge firmware in
+            P4-Board/c6-slave-espnow, which forwards them to the P4 display.
+
+            Connectionless: no association, no AP, no IP stack. It starts
+            delivering the moment both ends are powered, which suits a payload
+            that gets sealed into a rocket. Best-effort like the Wi-Fi
+            transport - chunks are dropped rather than stalling the logger.
+
+            Can be enabled alongside ENABLE_TELEMETRY_NET; both tee off the
+            same funnel. The channel is fixed in P4-Board/common/pilog_link.h
+            and must match on every participant.
+
     comment "──── Sampling ────"
 
     config SAMPLE_INTERVAL_MS

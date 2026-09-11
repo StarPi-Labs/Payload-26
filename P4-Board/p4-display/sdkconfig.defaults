@@ -1,0 +1,21 @@
+CONFIG_IDF_TARGET="esp32p4"
+
+# The P4 has no radio: Wi-Fi APIs are proxied to the on-board ESP32-C6 over
+# SDIO by esp-hosted. This is what makes esp_hosted_register_rx_callback_custom_data()
+# available for the ESP-NOW telemetry coming up from the C6.
+CONFIG_ESP_WIFI_ENABLED=y
+
+# 32 MB PSRAM on the ESP32-P4-Function-EV-Board. LVGL draw buffers for a
+# 1024x600 panel do not fit in internal RAM.
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_HEX=y
+CONFIG_SPIRAM_SPEED_200M=y
+
+# 16 MB flash on this board.
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+
+# LVGL needs headroom; the default 3.5 kB main task stack overflows during
+# widget creation.
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+
+CONFIG_FREERTOS_HZ=1000
