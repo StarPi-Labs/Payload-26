@@ -3,19 +3,32 @@ import { FiPlay, FiPause, FiSkipBack, FiSkipForward } from "solid-icons/fi"
 import { TimelineScrubberProps } from "../../models/ui/timeline-scrubber-props"
 import { formatDuration } from "../../utils/format-time"
 
-const SPEED_OPTIONS = [0.25, 0.5, 1, 2, 4];
+const DEFAULT_SPEED_OPTIONS = [0.25, 0.5, 1, 2, 4];
+
+/** "10s", "5 min", "1 h" - for the skip button tooltips. */
+function formatStep(seconds: number): string {
+    if (seconds >= 3600 && seconds % 3600 === 0) return `${seconds / 3600} h`
+    if (seconds >= 60 && seconds % 60 === 0) return `${seconds / 60} min`
+    return `${seconds}s`
+}
+
+function formatSpeed(speed: number): string {
+    return speed >= 1000 ? `${speed / 1000}kx` : `${speed}x`
+}
 
 const TimelineScrubber: Component<TimelineScrubberProps> = (props) => {
     const speed = () => props.speed ?? 1;
     const duration = () => Math.max(props.durationSeconds, 0.001);
+    const step = () => props.skipSeconds ?? 10;
+    const speeds = () => props.speedOptions ?? DEFAULT_SPEED_OPTIONS;
 
     return (
         <div class={`flex items-center gap-3 ${props.class ?? ""}`}>
             <button
                 class="btn btn-sm btn-square btn-ghost"
                 disabled={props.disabled}
-                onClick={() => props.onSkip(-10)}
-                title="Back 10s"
+                onClick={() => props.onSkip(-step())}
+                title={`Back ${formatStep(step())}`}
             >
                 <FiSkipBack class="w-4 h-4" />
             </button>
@@ -32,8 +45,8 @@ const TimelineScrubber: Component<TimelineScrubberProps> = (props) => {
             <button
                 class="btn btn-sm btn-square btn-ghost"
                 disabled={props.disabled}
-                onClick={() => props.onSkip(10)}
-                title="Forward 10s"
+                onClick={() => props.onSkip(step())}
+                title={`Forward ${formatStep(step())}`}
             >
                 <FiSkipForward class="w-4 h-4" />
             </button>
@@ -72,8 +85,8 @@ const TimelineScrubber: Component<TimelineScrubberProps> = (props) => {
                     onChange={(event) => props.onSpeedChange?.(Number(event.currentTarget.value))}
                     title="Playback speed"
                 >
-                    {SPEED_OPTIONS.map((option) => (
-                        <option value={option}>{option}x</option>
+                    {speeds().map((option) => (
+                        <option value={option}>{formatSpeed(option)}</option>
                     ))}
                 </select>
             )}

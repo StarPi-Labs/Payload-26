@@ -1,0 +1,197 @@
+{
+  "source": "C:\\Users\\Samuele\\Git\\Star-PI-Payload\\SD-Parser\\20hourTest.bin",
+  "sessions": [
+    {
+      "id": 1,
+      "t_start": 24.93,
+      "t_end": 72126.03,
+      "frames": 8835677
+    }
+  ],
+  "segment": {
+    "start_s": 120.002,
+    "end_s": 72041.103,
+    "duration_h": 19.978
+  },
+  "data_quality": {
+    "imu": {
+      "samples": 5984491,
+      "rate_hz": 83.357,
+      "rate_effective_hz": 83.209,
+      "period_s": 0.01199653877409063,
+      "clock": "fixed",
+      "timestamp_resolution_s": 0.01,
+      "timestamps_quantised": true,
+      "quantisation_beat_steps": 5,
+      "gaps": 3950,
+      "gap_typical_s": 0.04,
+      "gaps_per_minute": 3.295,
+      "samples_missing_est": 9631,
+      "samples_missing_pct": 0.161,
+      "largest_step_s": 0.07,
+      "duration_s": 71921.09
+    },
+    "moving_windows_pct": 0.044,
+    "gps": {
+      "samples": 71920,
+      "rate_hz": 1.0,
+      "rate_effective_hz": 1.0,
+      "period_s": 1.0,
+      "clock": "fixed",
+      "timestamp_resolution_s": 0.93,
+      "timestamps_quantised": false,
+      "quantisation_beat_steps": null,
+      "gaps": 0,
+      "gap_typical_s": null,
+      "gaps_per_minute": 0.0,
+      "samples_missing_est": 0,
+      "samples_missing_pct": 0.0,
+      "largest_step_s": 1.07,
+      "duration_s": 71919.17
+    }
+  },
+  "imu": {
+    "accel": {
+      "mean_g": [
+        0.048544,
+        -0.000984,
+        -0.965435
+      ],
+      "g_measured": 0.966656,
+      "scale_error_pct_if_level": -3.334,
+      "white_sigma_body_mps2": [
+        0.048958,
+        0.032988,
+        0.057057
+      ],
+      "white_sigma_nav_mps2": [
+        0.032987,
+        0.047412,
+        0.058348
+      ],
+      "velocity_random_walk_mps_per_sqrt_s": [
+        0.006093,
+        0.004045,
+        0.006531
+      ],
+      "bias_instability_mps2": [
+        0.0029797,
+        0.0021465,
+        0.0015802
+      ],
+      "bias_instability_at_tau_s": [
+        18.8,
+        18.8,
+        103.0
+      ],
+      "temperature_range_c": [
+        21.0,
+        37.86
+      ],
+      "bias_temperature_coefficient_mg_per_c": [
+        -0.8934,
+        0.4232,
+        0.3259
+      ],
+      "bias_temperature_fit_r2": [
+        0.511,
+        0.459,
+        0.906
+      ]
+    },
+    "gyro": {
+      "bias_dps": [
+        3.86585,
+        0.21736,
+        -4.96288
+      ],
+      "white_sigma_dps": [
+        0.37738,
+        0.11226,
+        0.06254
+      ],
+      "angle_random_walk_deg_per_sqrt_h": [
+        3.41,
+        1.4708,
+        3.3851
+      ],
+      "bias_instability_deg_per_h": [
+        71.637,
+        11.831,
+        44.46
+      ],
+      "bias_instability_at_tau_s": [
+        33.2,
+        181.4,
+        136.7
+      ]
+    }
+  },
+  "barometer": {
+    "timing": {
+      "samples": 1967578,
+      "rate_hz": 33.333,
+      "rate_effective_hz": 27.357,
+      "period_s": 0.03,
+      "clock": "irregular",
+      "timestamp_resolution_s": 0.03,
+      "timestamps_quantised": false,
+      "quantisation_beat_steps": null,
+      "gaps": 114326,
+      "gap_typical_s": 0.2,
+      "gaps_per_minute": 95.376,
+      "samples_missing_est": null,
+      "samples_missing_pct": null,
+      "largest_step_s": 0.22,
+      "duration_s": 71921.09
+    },
+    "rate_between_pauses_hz": 33.333,
+    "rate_effective_hz": 27.357,
+    "white_sigma_m": 0.2019,
+    "drift_range_m": 18.663,
+    "about": "white_sigma is sample-to-sample noise, which the filter models. drift_range is the spread of 1-minute means over the whole recording: weather, not sensor noise - irrelevant for a few-minute flight, dominant over hours."
+  },
+  "gps": {
+    "fixes": 71920,
+    "rate_hz": 1.0,
+    "outages_over_5x_nominal": 0,
+    "sigma_east_m": 4.422,
+    "sigma_north_m": 2.784,
+    "sigma_up_m": 4.921,
+    "cep50_m": 3.252,
+    "cep95_m": 10.25,
+    "correlation_time_east_s": 202.0,
+    "correlation_time_north_s": 218.0,
+    "mean_satellites": 11.66,
+    "about": "The filter treats GPS errors as independent from fix to fix. correlation_time shows how long they actually persist; when it is much longer than the fix interval, consecutive fixes are not independent evidence and the filter will trust GPS more than it should."
+  },
+  "power": {
+    "bus_volts_median": 4.9609,
+    "current_ma_median": 65.5,
+    "power_w_mean": 0.328,
+    "power_w_p95": 0.4179,
+    "energy_wh": 6.553,
+    "note": "INA219 measures only the rail its shunt is wired in series with; frameparser's bus-voltage scale also reads ~2.4% low."
+  },
+  "recommended": {
+    "sigma_acc": [
+      0.03299,
+      0.04741,
+      0.05835
+    ],
+    "sigma_gps": [
+      4.422,
+      2.784
+    ],
+    "sigma_baro": 0.5,
+    "notes": [
+      "sigma_acc is the measured per-sample accelerometer noise in the navigation frame (the Qimu diagonal, as LKF.mlx describes). On the bench that is all the IMU error there is; in flight, vibration and scale error add to it - watch the NIS that trajectory.py reports and raise --q-scale until it approaches 1.",
+      "sigma_baro is the measured white noise, floored at 0.5 m: a sensor at rest is a lower bound - in flight, airflow over the port and heating add error the bench cannot show.",
+      "sigma_gps is the measured position scatter; see gps.about on correlated errors."
+    ]
+  },
+  "warnings": [
+    "IMU timestamps are quantised to 10 ms while samples arrive every 12.00 ms (83.357 Hz): logged spacing jumps between 10 and 20 ms although the sensor is steady - no data is lost. Cause: frames are stamped with the FreeRTOS tick; stamping with esp_timer_get_time() would give real sample times.",
+    "barometer pauses for 200 ms about 95 times per minute (its own measurement cycle, e.g. the BME680 gas heater) - effective rate 27.357 Hz"
+  ]
+}

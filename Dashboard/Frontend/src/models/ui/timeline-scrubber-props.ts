@@ -14,6 +14,10 @@ export interface TimelineScrubberProps {
     /** Playback rate multiplier, e.g. 0.25 / 0.5 / 1 / 2 / 4. Defaults to 1 if omitted. */
     speed?: number;
     onSpeedChange?: (speed: number) => void;
+    /** Speeds offered in the selector. Long recordings need far higher ones. */
+    speedOptions?: number[];
+    /** Seconds jumped by the skip buttons. Defaults to 10. */
+    skipSeconds?: number;
     /** Points in the flight where the state machine changed mode, rendered as
      * ticks along the scrubber track. */
     modeTransitions?: ModeTransition[];

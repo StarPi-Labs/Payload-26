@@ -83,6 +83,9 @@ SCHEMA_FIELDS = [
     "gasResistance", "busVoltage", "current", "power",
 ]
 
+# Optional, appended with --kalman: RTS-smoothed estimates from trajectory.py.
+KALMAN_FIELDS = ["kfAltitude", "kfVerticalVelocity", "kfHorizontalVelocity"]
+
 # SD-Parser/json2telemetry.py -> ../Dashboard/Backend/data
 DASHBOARD_DATA_DIR = Path(__file__).resolve().parent.parent / "Dashboard" / "Backend" / "data"
 
@@ -93,16 +96,56 @@ G = 9.80665            # standard gravity: g -> m/s^2
 KMH_TO_MS = 1.0 / 3.6
 
 
-def load_frames(path):
+def load_frames(path, with_recording_order=False):
     """Load a bin2json.py output file. Tolerates the older minified format
-    (one giant line, trailing empty-dict sentinel) and the newer pretty one."""
+    (one giant line, trailing empty-dict sentinel) and the newer pretty one.
+
+    Frames are returned sorted by timestamp. With with_recording_order=True the
+    original order is returned as well: the Kalman filter needs it, because a
+    reboot restarts the onboard clock and sorting interleaves the two sessions.
+    """
     with open(path, "r") as f:
         raw = json.load(f)
-    frames = [d for d in raw
-              if isinstance(d, dict) and "sys-timestamp_ms" in d
-              and d.get("frame-status", "1") != "0"]
-    frames.sort(key=lambda d: d["sys-timestamp_ms"])
-    return frames
+    in_order = [d for d in raw
+                if isinstance(d, dict) and "sys-timestamp_ms" in d
+                and d.get("frame-status", "1") != "0"]
+    frames = sorted(in_order, key=lambda d: d["sys-timestamp_ms"])
+    return (frames, in_order) if with_recording_order else frames
+
+
+def add_kalman_columns(rows, frames_in_order, t0_ms, source, params=None,
+                       q_scale=1.0, heading_deg=0.0):
+    """Append Kalman-filtered/RTS-smoothed estimates to every row.
+
+    Runs SD-Parser/trajectory.py (LKF + RTS, matlab/LKF.mlx and RTS smoother.mlx)
+    on the same frames and interpolates its smoothed altitude and velocities onto
+    each row's timestamp. Rows outside the filtered session (e.g. before a
+    reboot) get NaN rather than a value borrowed from another session.
+    Returns the trajectory summary.
+    """
+    import numpy as np
+    import pilog_reader
+    import trajectory
+
+    rec = pilog_reader.select_session(
+        pilog_reader.recording_from_frames(frames_in_order, path=source))
+    prep, col, sigmas = trajectory.estimate(rec, params=params, q_scale=q_scale,
+                                            heading_deg=heading_deg, keep_full=True)
+    full = col.finish_series(col.full)
+    est_t = full["t"] + prep.t_origin                       # onboard seconds
+    row_t = np.array([t0_ms / 1000.0 + r["time"] for r in rows])
+
+    def at_rows(values):
+        return np.interp(row_t, est_t, values, left=np.nan, right=np.nan)
+
+    alt = at_rows(full["z"])
+    vz = at_rows(full["vz"])
+    vh = at_rows(np.hypot(full["vx"], full["vy"]))
+    for r, a, v, h in zip(rows, alt.tolist(), vz.tolist(), vh.tolist()):
+        r["kfAltitude"] = a
+        r["kfVerticalVelocity"] = v
+        r["kfHorizontalVelocity"] = h
+    return trajectory.build_summary(rec, prep, col, sigmas)
 
 
 def convert(frames, target_altitude=None, departure_altitude=0.0):
@@ -220,9 +263,12 @@ def write_txt(rows, meta, path):
             encoded = ",".join(f"{t['time']:.3f}:{t['mode']}"
                                 for t in meta["modeTransitions"])
             f.write(f"# modeTransitions={encoded}\n")
-        f.write(",".join(SCHEMA_FIELDS) + "\n")
+        # Kalman columns are appended only when they were computed (--kalman);
+        # the Dashboard reads columns by header name, so either layout works.
+        fields = SCHEMA_FIELDS + [k for k in KALMAN_FIELDS if rows and k in rows[0]]
+        f.write(",".join(fields) + "\n")
         for r in rows:
-            f.write(",".join(str(r[k]) for k in SCHEMA_FIELDS) + "\n")
+            f.write(",".join(str(r[k]) for k in fields) + "\n")
 
 
 def write_flight_folder(rows, meta, date_str):
@@ -296,6 +342,15 @@ def main():
                     help="launch site elevation above sea level (m), used to "
                          "compute altitudeMSL from the barometric altitude; "
                          "if omitted you'll be prompted for it (default 0)")
+    ap.add_argument("--kalman", action="store_true",
+                    help="also run the Kalman filter + RTS smoother (trajectory.py) and "
+                         "append kfAltitude/kfVerticalVelocity/kfHorizontalVelocity")
+    ap.add_argument("--noise-params", default=None,
+                    help="noise_params JSON from noise_characterization.py (with --kalman)")
+    ap.add_argument("--q-scale", type=float, default=1.0,
+                    help="inflate the IMU process noise for flight data (with --kalman)")
+    ap.add_argument("--heading-deg", type=float, default=0.0,
+                    help="compass heading of the body X axis (with --kalman; horizontal only)")
     args = ap.parse_args()
 
     target_altitude = args.target_altitude
@@ -305,12 +360,27 @@ def main():
     if departure_altitude is None:
         departure_altitude = prompt_departure_altitude()
 
-    frames = load_frames(args.source)
+    frames, frames_in_order = load_frames(args.source, with_recording_order=True)
     if not frames:
         print("[!] no usable frames found in the source file.", file=sys.stderr)
         sys.exit(1)
 
     rows, meta = convert(frames, target_altitude, departure_altitude)
+
+    if args.kalman:
+        params = None
+        if args.noise_params:
+            with open(args.noise_params, "r", encoding="utf-8") as f:
+                params = json.load(f)
+        print("[+] running Kalman filter + RTS smoother...")
+        summary = add_kalman_columns(rows, frames_in_order, frames[0]["sys-timestamp_ms"],
+                                     args.source, params=params, q_scale=args.q_scale,
+                                     heading_deg=args.heading_deg)
+        res, cons = summary["results"], summary["consistency"]
+        print(f"    apogee {res['apogee_m']:.1f} m, max vertical velocity "
+              f"{res['max_vertical_velocity_mps']:.1f} m/s, NIS baro {cons['nis_baro']}")
+        for w in summary["warnings"]:
+            print(f"[!] {w}", file=sys.stderr)
 
     if args.output is not None:
         write_txt(rows, meta, args.output)

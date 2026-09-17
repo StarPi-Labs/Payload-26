@@ -1,0 +1,18 @@
+# Flight data is mounted at runtime, never copied into the image. Without this
+# line `docker build` would send every recording (gigabytes) to the daemon.
+Backend/data
+**/.cache
+
+**/node_modules
+**/dist
+# Windows-generated; would pin the wrong native binaries inside the Linux image.
+**/package-lock.json
+**/__pycache__
+**/*.pyc
+**/.venv
+**/venv
+
+.git
+**/.vscode
+**/.idea
+.env

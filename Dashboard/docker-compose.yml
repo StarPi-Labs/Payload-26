@@ -1,0 +1,30 @@
+# Pi-LOG Dashboard
+#
+#   docker compose up -d --build
+#   open http://<server>:5000
+#
+# Everything site-specific can be overridden in a .env file next to this one:
+#   PILOG_PORT=5000
+#   PILOG_DATA_PATH=/srv/pilog/data
+services:
+  dashboard:
+    build: .
+    image: pilog-dashboard:latest
+    container_name: pilog-dashboard
+    restart: unless-stopped
+    ports:
+      - "${PILOG_PORT:-5000}:5000"
+    environment:
+      # Build column caches for every flight at startup, so opening a large
+      # recording in the browser is instant instead of waiting on first click.
+      PILOG_PREBUILD: "1"
+    volumes:
+      # Flight folders: data/<YYYY-MM-DD>/{telemetry,videos}/. Read-only - the
+      # server never modifies your recordings.
+      - ${PILOG_DATA_PATH:-./Backend/data}:/data:ro
+      # Column caches (~30% of the telemetry size). Persisting them means a
+      # container restart does not re-process a 20-hour recording.
+      - pilog-cache:/cache
+
+volumes:
+  pilog-cache:

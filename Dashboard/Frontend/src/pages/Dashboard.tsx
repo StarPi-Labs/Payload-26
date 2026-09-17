@@ -1,8 +1,11 @@
-import { Component, createSignal, onCleanup, onMount } from "solid-js";
+import { Component, createMemo, createSignal, onCleanup, onMount, Show } from "solid-js";
 
 import { AtmosphericSample } from "../models/atmospheric-sample";
 import { FlightSummary } from "../models/ui/flight-selector-props";
 import { ModeTransition } from "../models/ui/timeline-scrubber-props";
+import {
+    SeriesWindow, catmullRom, segmentIndex, skipStepFor, speedOptionsFor, targetResolution,
+} from "../utils/telemetry-series";
 
 import AttitudeCard from "../components/AttitudeCard";
 import AtmosphereCard from "../components/AtmosphereCard";
@@ -17,6 +20,33 @@ import PowerGraphCard from "../components/PowerGraphCard"
 import FlightSelector from "../components/base/FlightSelector";
 import TimelineScrubber from "../components/base/TimelineScrubber";
 import { VideoSource } from "../models/videp-source";
+
+/*
+ * Telemetry loading scheme
+ * ------------------------
+ * A recording can be far too long to hold at full resolution in the browser
+ * (20 hours at ~120 rows/s is ~9 million rows). So the dashboard keeps:
+ *
+ *   overview  the whole flight at up to OVERVIEW_POINTS rows. The server picks
+ *             those rows so each bucket's altitude/acceleration/velocity
+ *             extremes survive - apogee and peak-g are never decimated away.
+ *
+ *   detail    a higher-resolution window around the playhead, fetched on
+ *             demand. How fine it needs to be depends on playback speed: at
+ *             60 fps each frame advances speed/60 s of flight, so detail finer
+ *             than that can never be seen.
+ *
+ * Short flights fit entirely in the overview, so they never fetch detail.
+ */
+const OVERVIEW_POINTS = 20000;
+const DETAIL_POINTS = 20000;
+/** Overview/detail counts as fine enough within this factor of what playback needs. */
+const DETAIL_SLACK = 1.5;
+const PROCESSING_POLL_MS = 1500;
+const DETAIL_CHECK_MS = 200;
+const DETAIL_RETRY_MS = 2000;
+
+const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const Dashboard: Component = () => {
 
@@ -61,20 +91,37 @@ const Dashboard: Component = () => {
     const [isPlaying, setIsPlaying] = createSignal(false);
     const [playbackSpeed, setPlaybackSpeed] = createSignal(1);
     const [modeTransitions, setModeTransitions] = createSignal<ModeTransition[]>([]);
-    // frameSamples itself is a plain array (mutated directly, not through a
-    // setter) so JSX can't react to it -- this signal is the reactive proxy
-    // for "is there enough data to scrub/play", kept in sync wherever
-    // frameSamples is reassigned.
+    // The series live in plain variables (not signals) so JSX can't react to
+    // them -- this signal is the reactive proxy for "is there enough data to
+    // scrub/play", kept in sync wherever the overview is replaced.
     const [canPlay, setCanPlay] = createSignal(false);
     // Bumped on every seek/flight switch so the rolling graphs drop their
     // buffered points instead of drawing a line back across the jump.
     const [graphResetKey, setGraphResetKey] = createSignal(0);
+    /** Non-null while the server is still building the cache for a large recording. */
+    const [processing, setProcessing] = createSignal<{ progress: number } | null>(null);
+    const [loadError, setLoadError] = createSignal<string | null>(null);
+
+    const speedOptions = createMemo(() => speedOptionsFor(durationSec()));
+    const skipStep = createMemo(() => skipStepFor(durationSec()));
 
     let playbackRaf: number | undefined = undefined;
     let playAnchorPerf = 0;   // performance.now() when playback last (re)started
     let playAnchorSec = 0;    // elapsedSec() value at that anchor
-    let frameSamples: AtmosphericSample[] = [];
-    let frameTimes: number[] = [];
+
+    let overview: SeriesWindow<AtmosphericSample> | null = null;
+    let detail: SeriesWindow<AtmosphericSample> | null = null;
+    /** Raw file time of the flight's first row; every window is normalised by it. */
+    let flightTimeStart = 0;
+    /** Finest spacing worth fetching: the recording's own row density. */
+    let nativeSpacing = 0.01;
+
+    /** Bumped on every flight switch; responses carrying an older token are dropped. */
+    let loadToken = 0;
+    let detailAbort: AbortController | null = null;
+    let detailInFlight: { start: number; end: number; token: number } | null = null;
+    let lastDetailCheck = 0;
+    let lastDetailFailure = 0;
 
     const numericFields: Array<keyof AtmosphericSample> = [
         "roll", "pitch", "yaw",
@@ -118,17 +165,6 @@ const Dashboard: Component = () => {
         };
     }
 
-    function catmullRom(p0: number, p1: number, p2: number, p3: number, t: number): number {
-        const t2 = t * t;
-        const t3 = t2 * t;
-        return 0.5 * (
-            (2 * p1) +
-            (-p0 + p2) * t +
-            (2 * p0 - 5 * p1 + 4 * p2 - p3) * t2 +
-            (-p0 + 3 * p1 - 3 * p2 + p3) * t3
-        );
-    }
-
     function interpolateSampleCurve(
         prev: AtmosphericSample,
         current: AtmosphericSample,
@@ -162,34 +198,185 @@ const Dashboard: Component = () => {
         return fallbackIndex * 0.1;
     }
 
-    function findSegmentIndex(tSec: number): number {
-        let i = 0;
-        while (i < frameTimes.length - 2 && tSec >= frameTimes[i + 1]) {
-            i++;
+    // ---- series construction ------------------------------------------------
+
+    /** First raw timestamp in a telemetry response, for servers without meta.timeStart. */
+    function firstRawTime(body: any): number {
+        if (Array.isArray(body?.columns?.time) && body.columns.time.length) {
+            return Number(body.columns.time[0]) || 0;
         }
-        return i;
+        if (Array.isArray(body?.data) && body.data.length) {
+            return getPointTimeSeconds(body.data[0], 0);
+        }
+        return 0;
+    }
+
+    /** Turn a telemetry response (columns, or legacy rows) into a window. */
+    function buildWindow(body: any): SeriesWindow<AtmosphericSample> {
+        const cols = body?.columns;
+        let rawTimes: number[];
+        let samples: AtmosphericSample[];
+
+        if (cols && Array.isArray(cols.time)) {
+            const names = Object.keys(cols);
+            const n = cols.time.length;
+            rawTimes = new Array(n);
+            samples = new Array(n);
+            for (let i = 0; i < n; i++) {
+                const pt: Record<string, any> = {};
+                for (const k of names) pt[k] = cols[k][i];
+                samples[i] = mapTelemetryPointToSample(pt);
+                rawTimes[i] = Number(cols.time[i]);
+            }
+        } else {
+            const data: any[] = Array.isArray(body?.data) ? body.data : [];
+            samples = data.map((pt) => mapTelemetryPointToSample(pt));
+            rawTimes = data.map((pt, i) => getPointTimeSeconds(pt, i));
+        }
+
+        const times = rawTimes.map((t) => t - flightTimeStart);
+        const n = times.length;
+        const start = n ? times[0] : 0;
+        const end = n ? times[n - 1] : 0;
+        // Average spacing, not median: the server's extreme-preserving picks
+        // cluster, so a median would overstate a decimated window's resolution.
+        const spacing = n > 1 ? (end - start) / (n - 1) : Infinity;
+        return { times, samples, start, end, spacing };
+    }
+
+    function applyMeta(meta: any) {
+        const targetFromMeta = Number(meta?.targetAltitude);
+        const departureFromMeta = Number(meta?.departureAltitude);
+        const t0EpochFromMeta = Number(meta?.t0EpochMs);
+        const t0IsoFromMeta = typeof meta?.t0 === "string" ? meta.t0 : null;
+
+        if (Number.isFinite(t0EpochFromMeta) && t0EpochFromMeta > 0) {
+            setT0EpochMs(t0EpochFromMeta);
+        } else if (t0IsoFromMeta) {
+            const parsed = Date.parse(t0IsoFromMeta);
+            setT0EpochMs(Number.isFinite(parsed) ? parsed : null);
+        } else {
+            setT0EpochMs(null);
+        }
+
+        if (Number.isFinite(targetFromMeta) && targetFromMeta > 0) {
+            setTargetAltitude(targetFromMeta);
+        }
+        // 0 is a valid departure altitude (sea-level launch), unlike target.
+        setDepartureAltitude(Number.isFinite(departureFromMeta) ? departureFromMeta : 0);
+
+        const transitions: ModeTransition[] = Array.isArray(meta?.modeTransitions)
+            ? meta.modeTransitions
+                .map((t: any) => ({ time: Number(t.time) - flightTimeStart, mode: String(t.mode) }))
+                .filter((t: ModeTransition) => Number.isFinite(t.time))
+            : [];
+        setModeTransitions(transitions);
+    }
+
+    // ---- sampling -----------------------------------------------------------
+
+    /** Detail when it covers t, otherwise the overview. */
+    function windowFor(t: number): SeriesWindow<AtmosphericSample> | null {
+        if (detail && detail.samples.length >= 2 && t >= detail.start && t <= detail.end) {
+            return detail;
+        }
+        return overview;
     }
 
     function computeSampleAtTime(tSec: number): AtmosphericSample {
-        if (frameSamples.length === 0) return emptySample;
-        if (frameSamples.length === 1) return frameSamples[0];
+        const win = windowFor(tSec);
+        if (!win || win.samples.length === 0) return emptySample;
+        if (win.samples.length === 1) return win.samples[0];
 
-        const last = frameTimes[frameTimes.length - 1];
-        const clamped = Math.min(last, Math.max(0, tSec));
-        const i = findSegmentIndex(clamped);
-        const t0 = frameTimes[i];
-        const t1 = frameTimes[i + 1];
+        const times = win.times;
+        const clamped = Math.min(times[times.length - 1], Math.max(times[0], tSec));
+        const i = segmentIndex(times, clamped);
+        const t0 = times[i];
+        const t1 = times[i + 1];
         const denom = Math.max(0.000001, t1 - t0);
         const u = (clamped - t0) / denom;
 
-        const prev = frameSamples[Math.max(0, i - 1)];
-        const current = frameSamples[i];
-        const next = frameSamples[i + 1];
-        const next2 = frameSamples[Math.min(frameSamples.length - 1, i + 2)];
+        const prev = win.samples[Math.max(0, i - 1)];
+        const current = win.samples[i];
+        const next = win.samples[i + 1];
+        const next2 = win.samples[Math.min(win.samples.length - 1, i + 2)];
 
         const epoch = t0EpochMs() ?? Date.now();
         return interpolateSampleCurve(prev, current, next, next2, u, epoch + clamped * 1000);
     }
+
+    // ---- detail windows -------------------------------------------------------
+
+    /** Fetch a detail window if the playhead needs finer data than is loaded. */
+    function maybeFetchDetail(t: number) {
+        const flightId = activeFlightId();
+        if (!overview || !flightId) return;
+
+        const need = targetResolution(playbackSpeed(), nativeSpacing);
+        if (overview.spacing <= need * DETAIL_SLACK) return;          // overview suffices
+
+        const covered = !!detail && t >= detail.start && t <= detail.end
+            && detail.spacing <= need * DETAIL_SLACK;
+        // While playing, fetch the next window before running off this one.
+        const nearEnd = covered && isPlaying() && !!detail
+            && t > detail.start + 0.75 * (detail.end - detail.start);
+        if (covered && !nearEnd) return;
+
+        if (detailInFlight && detailInFlight.token === loadToken
+            && t >= detailInFlight.start && t <= detailInFlight.end) {
+            return;                                                    // one is already coming
+        }
+        if (performance.now() - lastDetailFailure < DETAIL_RETRY_MS) return;
+
+        const dur = durationSec();
+        const span = Math.min(dur, Math.max(need * DETAIL_POINTS, 10));
+        // Mostly ahead of the playhead when playing, centred when paused.
+        const behind = isPlaying() ? 0.05 : 0.5;
+        let start = t - span * behind;
+        let end = start + span;
+        if (start < 0) { end -= start; start = 0; }
+        if (end > dur) { start = Math.max(0, start - (end - dur)); end = dur; }
+
+        void fetchDetail(flightId, start, end);
+    }
+
+    async function fetchDetail(flightId: string, start: number, end: number) {
+        const token = loadToken;
+        detailAbort?.abort();
+        const ctrl = new AbortController();
+        detailAbort = ctrl;
+        detailInFlight = { start, end, token };
+
+        const rawStart = (start + flightTimeStart).toFixed(3);
+        const rawEnd = (end + flightTimeStart).toFixed(3);
+        try {
+            const res = await fetch(
+                `/api/flights/${flightId}/telemetry?start=${rawStart}&end=${rawEnd}&maxPoints=${DETAIL_POINTS}`,
+                { signal: ctrl.signal },
+            );
+            if (token !== loadToken || ctrl.signal.aborted) return;
+            if (res.status !== 200) {
+                lastDetailFailure = performance.now();
+                return;                           // overview keeps playback going
+            }
+            const win = buildWindow(await res.json());
+            if (token !== loadToken || ctrl.signal.aborted) return;
+            if (win.samples.length >= 2) {
+                detail = win;
+                // Paused on a spot that just got sharper: show the better value.
+                if (!isPlaying()) setSample(computeSampleAtTime(elapsedSec()));
+            }
+        } catch (e) {
+            if (!ctrl.signal.aborted) lastDetailFailure = performance.now();
+        } finally {
+            if (detailInFlight && detailInFlight.token === token
+                && detailInFlight.start === start && detailInFlight.end === end) {
+                detailInFlight = null;
+            }
+        }
+    }
+
+    // ---- playback -------------------------------------------------------------
 
     function clearPlaybackTimers() {
         if (playbackRaf) {
@@ -216,11 +403,15 @@ const Dashboard: Component = () => {
 
         setElapsedSec(t);
         setSample(computeSampleAtTime(t));
+        if (now - lastDetailCheck > DETAIL_CHECK_MS) {
+            lastDetailCheck = now;
+            maybeFetchDetail(t);
+        }
         playbackRaf = requestAnimationFrame(tick);
     }
 
     function play() {
-        if (frameSamples.length < 2) return;
+        if (!canPlay()) return;
         // Restart from the beginning if playback had already reached the end.
         if (elapsedSec() >= durationSec()) {
             setElapsedSec(0);
@@ -229,6 +420,7 @@ const Dashboard: Component = () => {
         playAnchorSec = elapsedSec();
         setIsPlaying(true);
         clearPlaybackTimers();
+        maybeFetchDetail(elapsedSec());
         playbackRaf = requestAnimationFrame(tick);
     }
 
@@ -251,6 +443,7 @@ const Dashboard: Component = () => {
             playAnchorPerf = performance.now();
             playAnchorSec = clamped;
         }
+        maybeFetchDetail(clamped);
     }
 
     function skip(deltaSec: number) {
@@ -265,52 +458,81 @@ const Dashboard: Component = () => {
             playAnchorSec = elapsedSec();
         }
         setPlaybackSpeed(newSpeed);
+        // Slower playback may need finer data than is currently loaded.
+        maybeFetchDetail(elapsedSec());
     }
 
-    async function loadTelemetryForFlight(flightId: string) {
+    // ---- loading ----------------------------------------------------------------
+
+    async function refreshFlights(): Promise<FlightSummary[]> {
         try {
-            const res = await fetch(`/api/flights/${flightId}/telemetry`);
-            if (!res.ok) return;
+            const res = await fetch('/api/flights');
+            if (!res.ok) return flights();
             const json = await res.json();
-            const data = json.data || [];
-            const targetFromMeta = Number(json?.meta?.targetAltitude);
-            const departureFromMeta = Number(json?.meta?.departureAltitude);
-            const t0EpochFromMeta = Number(json?.meta?.t0EpochMs);
-            const t0IsoFromMeta = typeof json?.meta?.t0 === "string" ? json.meta.t0 : null;
-
-            if (Number.isFinite(t0EpochFromMeta) && t0EpochFromMeta > 0) {
-                setT0EpochMs(t0EpochFromMeta);
-            } else if (t0IsoFromMeta) {
-                const parsed = Date.parse(t0IsoFromMeta);
-                if (Number.isFinite(parsed)) {
-                    setT0EpochMs(parsed);
-                }
-            } else {
-                setT0EpochMs(null);
-            }
-
-            if (Number.isFinite(targetFromMeta) && targetFromMeta > 0) {
-                setTargetAltitude(targetFromMeta);
-            }
-            // 0 is a valid departure altitude (sea-level launch), unlike target.
-            setDepartureAltitude(Number.isFinite(departureFromMeta) ? departureFromMeta : 0);
-
-            const transitions: ModeTransition[] = Array.isArray(json?.meta?.modeTransitions)
-                ? json.meta.modeTransitions
-                    .map((t: any) => ({ time: Number(t.time), mode: String(t.mode) }))
-                    .filter((t: ModeTransition) => Number.isFinite(t.time))
-                : [];
-            setModeTransitions(transitions);
-
-            frameSamples = data.map((pt: any) => mapTelemetryPointToSample(pt));
-            const rawTimes = data.map((pt: any, i: number) => getPointTimeSeconds(pt, i));
-            // Normalize to start at 0 regardless of the source timestamps.
-            const t0 = rawTimes.length ? rawTimes[0] : 0;
-            frameTimes = rawTimes.map((t: number) => t - t0);
-            setDurationSec(frameTimes.length ? frameTimes[frameTimes.length - 1] : 0);
-            setCanPlay(frameSamples.length >= 2);
+            const list: FlightSummary[] = json.flights || [];
+            setFlights(list);
+            return list;
         } catch (e) {
-            // ignore network errors silently for now
+            return flights();
+        }
+    }
+
+    async function loadTelemetryForFlight(flightId: string, token: number) {
+        let waited = false;
+        while (token === loadToken) {
+            let res: Response | null = null;
+            let body: any = null;
+            try {
+                res = await fetch(`/api/flights/${flightId}/telemetry?maxPoints=${OVERVIEW_POINTS}`);
+                try { body = await res.json(); } catch (e) { body = null; }
+            } catch (e) {
+                res = null;
+            }
+            if (token !== loadToken) return;
+            if (!res) {
+                setLoadError("Could not reach the server.");
+                return;
+            }
+
+            if (res.status === 202) {
+                // Large recording: the server is building its cache. Poll.
+                waited = true;
+                setProcessing({ progress: Number(body?.progress) || 0 });
+                await delay(PROCESSING_POLL_MS);
+                continue;
+            }
+            setProcessing(null);
+
+            if (res.status !== 200 || !body) {
+                setLoadError(body?.error
+                    ? `Telemetry unavailable: ${body.error}`
+                    : `Telemetry unavailable (HTTP ${res.status}).`);
+                return;
+            }
+
+            const meta = body.meta ?? {};
+            flightTimeStart = Number.isFinite(Number(meta.timeStart))
+                ? Number(meta.timeStart) : firstRawTime(body);
+            applyMeta(meta);
+
+            overview = buildWindow(body);
+
+            const timeEnd = Number(meta.timeEnd);
+            const duration = Number.isFinite(timeEnd)
+                ? Math.max(0, timeEnd - flightTimeStart)
+                : (overview.times.length ? overview.times[overview.times.length - 1] : 0);
+            setDurationSec(duration);
+
+            const totalRows = Number(meta.totalRows);
+            nativeSpacing = Number.isFinite(totalRows) && totalRows > 1 && duration > 0
+                ? Math.max(0.001, duration / totalRows)
+                : Math.max(0.001, overview.spacing);
+
+            setCanPlay(overview.samples.length >= 2);
+
+            // The selector showed "preparing"; refresh it now that it is ready.
+            if (waited) void refreshFlights();
+            return;
         }
     }
 
@@ -337,45 +559,54 @@ const Dashboard: Component = () => {
     async function selectFlight(flightId: string) {
         if (!flightId || flightId === activeFlightId()) return;
         pause();
+
+        loadToken++;
+        const token = loadToken;
+        detailAbort?.abort();
+        detailAbort = null;
+        detailInFlight = null;
+        overview = null;
+        detail = null;
+
         setActiveFlightId(flightId);
         setVideoSources([]);
-        frameSamples = [];
-        frameTimes = [];
         setElapsedSec(0);
         setDurationSec(0);
         setModeTransitions([]);
         setDepartureAltitude(0);
         setCanPlay(false);
+        setProcessing(null);
+        setLoadError(null);
+        // Speed options depend on flight length; 1000x on a 2-minute flight is nonsense.
+        setPlaybackSpeed(1);
+        setSample(emptySample);
         setGraphResetKey(k => k + 1);
 
         await Promise.all([
             loadVideosForFlight(flightId),
-            loadTelemetryForFlight(flightId),
+            loadTelemetryForFlight(flightId, token),
         ]);
+        if (token !== loadToken) return;
 
         // Land on the first frame, paused -- let the user press Play or drag
         // the scrubber rather than immediately replaying the whole flight.
-        if (frameSamples.length) {
+        if (overview && overview.samples.length) {
             setSample(computeSampleAtTime(0));
+            maybeFetchDetail(0);
         }
     }
 
     onMount(async () => {
-        try {
-            const res = await fetch('/api/flights');
-            if (!res.ok) return;
-            const json = await res.json();
-            const list: FlightSummary[] = json.flights || [];
-            setFlights(list);
-            if (list.length === 0) return;
-            await selectFlight(list[0].id);
-        } catch (e) {
-            // nothing
-        }
+        const list = await refreshFlights();
+        // Newest first; skip anything the server could not read at all.
+        const first = list.find((f) => f.status !== "error");
+        if (first) await selectFlight(first.id);
     });
 
     onCleanup(() => {
         clearPlaybackTimers();
+        loadToken++;            // stops any processing poll loop
+        detailAbort?.abort();
     });
 
     const timestampLabel = () => {
@@ -396,7 +627,25 @@ const Dashboard: Component = () => {
                 </div>
 
                 <div class="card bg-base-200/70 border border-base-300 shadow-sm">
-                    <div class="card-body py-3">
+                    <div class="card-body py-3 gap-3">
+                        <Show when={processing()}>
+                            {(p) => (
+                                <div class="flex items-center gap-3 text-sm">
+                                    <span class="loading loading-spinner loading-sm" />
+                                    <span class="whitespace-nowrap">
+                                        Preparing recording for playback… {Math.round(p().progress * 100)}%
+                                    </span>
+                                    <progress
+                                        class="progress progress-primary flex-1"
+                                        value={p().progress * 100}
+                                        max="100"
+                                    />
+                                </div>
+                            )}
+                        </Show>
+                        <Show when={loadError()}>
+                            {(msg) => <div class="alert alert-error py-2 text-sm">{msg()}</div>}
+                        </Show>
                         <TimelineScrubber
                             elapsedSeconds={elapsedSec()}
                             durationSeconds={durationSec()}
@@ -407,6 +656,8 @@ const Dashboard: Component = () => {
                             onSkip={skip}
                             speed={playbackSpeed()}
                             onSpeedChange={changeSpeed}
+                            speedOptions={speedOptions()}
+                            skipSeconds={skipStep()}
                             modeTransitions={modeTransitions()}
                         />
                     </div>

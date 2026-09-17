@@ -19,6 +19,22 @@ const RocketMapCard: Component<RocketMapCardProps> = (props) => {
   // map from starting every trajectory at (0, 0) before telemetry loads.
   let needsAnchor = true;
 
+  // Playback updates the position every animation frame. Adding a polyline
+  // vertex per frame grows the track without bound over a long recording (and
+  // a stationary GPS just jitters in place), so only record real movement and
+  // thin the line once it gets long.
+  const MIN_TRACK_STEP_M = 1.5;
+  const MAX_TRACK_POINTS = 5000;
+  let lastTrackLat = NaN;
+  let lastTrackLon = NaN;
+
+  function metersBetween(lat1: number, lon1: number, lat2: number, lon2: number): number {
+    const mPerDeg = 111320;
+    const dy = (lat2 - lat1) * mPerDeg;
+    const dx = (lon2 - lon1) * mPerDeg * Math.cos((lat1 * Math.PI) / 180);
+    return Math.hypot(dx, dy);
+  }
+
   onMount(() => {
     if (!mapRef) return;
 
@@ -67,6 +83,8 @@ const RocketMapCard: Component<RocketMapCardProps> = (props) => {
     if (startMarker) { startMarker.remove(); startMarker = undefined; }
     if (currentMarker) { currentMarker.remove(); currentMarker = undefined; }
     if (trajectory) { trajectory.remove(); trajectory = undefined; }
+    lastTrackLat = NaN;
+    lastTrackLon = NaN;
     needsAnchor = true;
   }
 
@@ -94,15 +112,31 @@ const RocketMapCard: Component<RocketMapCardProps> = (props) => {
         opacity: 0.8,
       }).addTo(map);
       map.setView([lat, long], 14);
+      lastTrackLat = lat;
+      lastTrackLon = long;
       needsAnchor = false;
       return;
     }
 
     if (currentMarker && trajectory) {
       currentMarker.setLatLng([lat, long]);
-      trajectory.addLatLng([lat, long]);
 
-      if (props.gpsFix) {
+      if (!Number.isFinite(lastTrackLat)
+          || metersBetween(lastTrackLat, lastTrackLon, lat, long) >= MIN_TRACK_STEP_M) {
+        trajectory.addLatLng([lat, long]);
+        lastTrackLat = lat;
+        lastTrackLon = long;
+
+        const pts = trajectory.getLatLngs() as L.LatLng[];
+        if (pts.length > MAX_TRACK_POINTS) {
+          // Halve the vertex count, always keeping the newest point.
+          trajectory.setLatLngs(pts.filter((_, i) => i % 2 === 0 || i === pts.length - 1));
+        }
+      }
+
+      // Panning every frame keeps the map in constant motion; only follow the
+      // rocket once it gets near the edge of the view.
+      if (props.gpsFix && !map.getBounds().pad(-0.2).contains([lat, long])) {
         map.panTo([lat, long]);
       }
     }

@@ -2,3 +2,16 @@
 **/package-lock.json
 **/build
 **/managed_components
+# Dashboard telemetry column caches (rebuilt automatically, can be GBs)
+**/.cache/
+# Python bytecode caches (regenerated on every run, differ per Python version)
+__pycache__/
+*.pyc
+# Recordings over GitHub's 100 MB per-file limit. Git does NOT back these up,
+# so keep copies somewhere else (e.g. next to the Dashboard data on the server).
+SD-Parser/20hourTest.bin
+SD-Parser/flight_20hourTest.json
+SD-Parser/flight_Sabato.json
+Dashboard/Backend/data/2026-09-16/telemetry/telemetry.txt
+# Third-party tool, cloned locally as described in P4-Board/c6-flasher/README.md
+P4-Board/c6-flasher/esp-usb-bridge/

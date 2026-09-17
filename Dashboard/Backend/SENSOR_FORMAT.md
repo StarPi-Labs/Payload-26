@@ -38,6 +38,13 @@ time,altitude,altitudeMSL,velocity,horizontalVelocity,acceleration,accelerationX
 | busVoltage | INA219 supply/battery voltage | V |
 | current | INA219 current draw | mA |
 | power | Power draw (busVoltage × current) | W |
+| kfAltitude | *Optional.* Kalman/RTS-smoothed altitude above the pad (`json2telemetry.py --kalman`) | meters |
+| kfVerticalVelocity | *Optional.* Kalman/RTS-smoothed vertical velocity | m/s |
+| kfHorizontalVelocity | *Optional.* Kalman/RTS-smoothed horizontal speed | m/s |
+
+The server reads columns **by header name**, so optional columns may be present
+or absent, and files with fewer columns (like the 2024 sample flight) load with
+defaults for whatever they lack.
 
 ## Metadata Lines
 

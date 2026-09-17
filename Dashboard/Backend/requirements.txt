@@ -1,2 +1,7 @@
 Flask==3.0.0
 flask-cors==4.0.0
+numpy>=1.26
+pandas>=2.1
+# Production server for the Docker image. gunicorn does not run on Windows;
+# locally use `python server.py` instead.
+gunicorn>=22.0 ; sys_platform != "win32"
