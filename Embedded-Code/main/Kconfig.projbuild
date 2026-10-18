@@ -17,6 +17,20 @@ menu "Star-PI Payload Configuration"
             MPU-6050 6-axis IMU on I2C address 0x68.
             Produces 14 bytes per sample: accel(6) + temp(2) + gyro(6).
 
+    config IMU_REMAP_TO_CAD
+        bool "Rotate IMU axes into the payload (CAD) frame"
+        default y
+        depends on ENABLE_MPU6050
+        help
+            Remap accelerometer and gyro axes from the chip's orientation on
+            the board to the payload frame: +X away from the launch rail, +Y
+            right seen from the front, +Z up towards the nose. Applied right
+            after reading, so the SD log, the radio and the ground tools all
+            get payload axes. The mapping itself is the IMU_CAD_* table in
+            sensor_config.h; launch detection uses |accel| and is unaffected.
+
+            Say n to log the raw chip axes.
+
     config ENABLE_BME680
         bool "Enable BME680 (pressure / temp / humidity, 0x76)"
         default n
@@ -33,6 +47,19 @@ menu "Star-PI Payload Configuration"
             Adafruit INA219 power monitor on I2C address 0x40.
             Measures bus voltage, shunt voltage, current, and power.
             Produces 8 raw bytes per sample.
+
+    config INA219_SHUNT_REVERSED
+        bool "INA219 shunt wired backwards (VIN+ and VIN- swapped)"
+        default y
+        depends on ENABLE_INA219
+        help
+            Negate the measured shunt voltage, so current and power read
+            positive while VIN+ and VIN- are swapped on the harness. Applied
+            before logging, so the SD log, the radio and every ground tool get
+            the right sign without changes.
+
+            Say n once the wires are the right way round again
+            (supply -> VIN+, VIN- -> load).
 
     config ENABLE_GPS
         bool "Enable GPS module (UART)"
@@ -111,9 +138,28 @@ menu "Star-PI Payload Configuration"
             that gets sealed into a rocket. Best-effort like the Wi-Fi
             transport - chunks are dropped rather than stalling the logger.
 
-            Can be enabled alongside ENABLE_TELEMETRY_NET; both tee off the
-            same funnel. The channel is fixed in P4-Board/common/pilog_link.h
-            and must match on every participant.
+            Can be enabled alongside ENABLE_TELEMETRY_NET; both are fed live,
+            in every mode, by radio_forward() in frame_logger.c. The channel is
+            fixed in P4-Board/common/pilog_link.h and must match on every
+            participant.
+
+    config TELEMETRY_RADIO_OFF_AT_LAUNCH
+        bool "Switch the radio link off at launch (BOOST)"
+        default y
+        depends on ENABLE_TELEMETRY_ESPNOW || ENABLE_TELEMETRY_NET
+        help
+            Stop the live radio feed the moment the state machine reaches
+            BOOST, and tear ESP-NOW and Wi-Fi down, so launch - the most
+            critical moment - runs with every resource on sensing and SD
+            logging. The ground link is only needed on the pad.
+
+            The logger only sets a flag; the radio's own low-priority task does
+            the teardown, so no flight-critical task ever waits on it. The SD
+            log is unaffected. Wi-Fi itself is only stopped when ESP-NOW is its
+            sole user (ENABLE_TELEMETRY_NET off); otherwise the access point
+            stays up but silent.
+
+            Say n to keep live telemetry during flight.
 
     comment "──── Sampling ────"
 

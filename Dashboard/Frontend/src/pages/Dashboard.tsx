@@ -66,6 +66,7 @@ const Dashboard: Component = () => {
         lat: 0,
         long: 0,
         gps: false,
+        sats: null,
         temp: 0,
         pres: 0,
         rh: 0,
@@ -164,6 +165,8 @@ const Dashboard: Component = () => {
             lat: pt.gpsLat ?? pt.lat ?? 0,
             long: pt.gpsLon ?? pt.long ?? 0,
             gps: gpsFromPoint,
+            // a count, so it is never interpolated (not in numericFields)
+            sats: typeof pt.gpsSats === "number" ? pt.gpsSats : null,
             temp: pt.temperature ?? pt.temp ?? 0,
             pres: pt.pressure ?? pt.pres ?? 0,
             rh: pt.humidity ?? pt.rh ?? 0,
@@ -711,62 +714,54 @@ const Dashboard: Component = () => {
                 horizontalVelocity={sample().hvel}
                 latitude={sample().lat}
                 longitude={sample().long}
+                satellites={sample().sats}
                 gpsFix={sample().gps}
             />
 
-            <div class="grid grid-cols-1 lg:grid-cols-5 gap-4">
-                {/* VIDEO PLAYER + ROCKET VIEW */}
-                <div class="lg:col-span-3 h-full flex flex-col sm:flex-row gap-4">
-                    <div class="flex-1 min-w-0">
-                        <VideoPlayer
-                            sources={videoSources()}
-                            objectFit="cover"
-                            loop={false}
-                        />
-                    </div>
-                    <RocketView
-                        flightId={activeFlightId()}
-                        qw={sample().qw}
-                        qx={sample().qx}
-                        qy={sample().qy}
-                        qz={sample().qz}
-                        accelX={sample().padAx}
-                        accelY={sample().padAy}
-                        accelZ={sample().padAz}
-                        class="w-full sm:w-[30%] shrink-0 h-[340px] sm:h-auto sm:min-h-[300px]"
+            {/* VIDEO PLAYER + ROCKET VIEW + TRACKER ALTITUDINE */}
+            <div class="flex flex-col sm:flex-row gap-4 sm:h-[460px] xl:h-[540px]">
+                <div class="flex-1 min-w-0 h-[260px] sm:h-full">
+                    <VideoPlayer
+                        sources={videoSources()}
+                        objectFit="cover"
+                        loop={false}
                     />
                 </div>
+                <RocketView
+                    flightId={activeFlightId()}
+                    qw={sample().qw}
+                    qx={sample().qx}
+                    qy={sample().qy}
+                    qz={sample().qz}
+                    accelX={sample().padAx}
+                    accelY={sample().padAy}
+                    accelZ={sample().padAz}
+                    class="w-full sm:w-[26%] shrink-0 h-[340px] sm:h-full"
+                />
+                <AltitudeTracker
+                    currentAltitude={sample().alt}
+                    targetAltitude={targetAltitude()}
+                    maxAltitude={Math.max(targetAltitude(), 100)}
+                    gpsAltitude={sample().gps ? sample().galt - departureAltitude() : undefined}
+                    class="w-full sm:w-28 shrink-0 h-[350px] sm:h-full"
+                />
+            </div>
 
-                <div class="flex flex-col sm:flex-row gap-4 lg:col-span-2">
-                    {/* SOTTO-COLONNA GRAFICI */}
-                    <div class="flex flex-col gap-4 flex-1 w-full sm:w-0">
-                        <VelocityGraphCard
-                            time={sample().ts}
-                            verticalVelocity={sample().vvel}
-                            horizontalVelocity={sample().hvel}
-                            class="w-full"
-                            resetKey={graphResetKey()}
-                        />
-
-                        <AltitudeGraphCard
-                            time={sample().ts}
-                            altitude={sample().alt}
-                            class="w-full"
-                            resetKey={graphResetKey()}
-                        />
-                    </div>
-
-                    {/* MINI COLONNA TRACKER ALTITUDINE */}
-                    <AltitudeTracker
-                        currentAltitude={sample().alt}
-                        targetAltitude={targetAltitude()}
-                        maxAltitude={Math.max(targetAltitude(), 100)}
-                        gpsAltitude={sample().gps ? sample().galt - departureAltitude() : undefined}
-                        class="w-full sm:w-28 shrink-0 h-[350px] sm:h-auto"
-                    />
-
-                </div>
-
+            {/* GRAFICI VELOCITA E ALTITUDINE */}
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                <VelocityGraphCard
+                    time={sample().ts}
+                    verticalVelocity={sample().vvel}
+                    horizontalVelocity={sample().hvel}
+                    class="w-full"
+                    resetKey={graphResetKey()}
+                />
+                <AltitudeGraphCard
+                    time={sample().ts}
+                    altitude={sample().alt}
+                    class="w-full"
+                    resetKey={graphResetKey()}
+                />
             </div>
 
             {/* GRAFICO */}

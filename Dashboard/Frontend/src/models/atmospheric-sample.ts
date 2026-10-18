@@ -9,6 +9,8 @@ export interface AtmosphericSample extends InertialSample {
     lat: number
     long: number
     gps: boolean
+    /** satellites used in the current fix; null when the flight's file has no gpsSats column */
+    sats: number | null
     temp: number
     pres: number
     rh: number

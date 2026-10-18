@@ -1,0 +1,33 @@
+@import 'tailwindcss';
+@import 'uplot/dist/uPlot.min.css';
+
+@plugin "daisyui" {
+    themes: dark --default, light;
+}
+
+html,
+body,
+#root {
+    height: 100%;
+    margin: 0;
+}
+
+/* uPlot's legend in the app's colours */
+.u-legend {
+    color: var(--color-base-content);
+    font-size: 12px;
+}
+
+.u-legend .u-series th {
+    font-weight: 500;
+}
+
+/* Blockly fills its pane; the pane decides the size */
+.blockly-host {
+    position: absolute;
+    inset: 0;
+}
+
+.help-text p + p {
+    margin-top: 0.5rem;
+}

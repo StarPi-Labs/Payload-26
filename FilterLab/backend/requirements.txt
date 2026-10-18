@@ -1,0 +1,9 @@
+Flask==3.0.0
+numpy>=1.26
+scipy>=1.11
+pandas>=2.1
+# SD-Parser/frameparser.py imports serial at the top (for its live-port mode)
+pyserial>=3.5
+# Production server for the Docker image. gunicorn does not run on Windows;
+# locally use `python lab_server.py` instead.
+gunicorn>=22.0 ; sys_platform != "win32"

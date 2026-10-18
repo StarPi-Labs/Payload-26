@@ -1,0 +1,18 @@
+# The build context is the whole repository (see Dockerfile). Send only what the
+# image needs - everything else, above all the multi-GB recordings, stays out.
+*
+!FilterLab/backend/
+!FilterLab/frontend/
+!SD-Parser/frameparser.py
+!SD-Parser/pilog_reader.py
+!SD-Parser/kalman.py
+!SD-Parser/trajectory.py
+!SD-Parser/noise_characterization.py
+!SD-Parser/imu_calibration.py
+!Dashboard/Backend/attitude.py
+
+FilterLab/frontend/node_modules
+FilterLab/frontend/dist
+**/package-lock.json
+**/__pycache__
+**/*.pyc

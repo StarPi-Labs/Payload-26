@@ -7,7 +7,8 @@ backend expects (Dashboard/Backend/SENSOR_FORMAT.md):
 
     time,altitude,altitudeMSL,velocity,horizontalVelocity,acceleration,
     accelerationX,accelerationY,accelerationZ,temperature,pressure,humidity,
-    gpsLat,gpsLon,gpsAlt,pitch,roll,yaw,gasResistance,busVoltage,current,power
+    gpsLat,gpsLon,gpsAlt,pitch,roll,yaw,gasResistance,busVoltage,current,power,
+    gpsSats
 
 This exact order matters -- Dashboard/Backend/server.py parses it
 positionally. If you add columns, APPEND them at the end (as gasResistance/
@@ -34,7 +35,9 @@ GPS position (gpsLat/gpsLon/gpsAlt) is forward-filled sample to sample as
 usual, AND back-filled: every row before the first fix is set to the first
 fix's position too, on the assumption the payload had not moved yet (it was
 still on the pad/bench) -- so the track does not appear to teleport in from
-(0, 0) the instant the receiver locks.
+(0, 0) the instant the receiver locks. gpsSats, the number of satellites
+used for that fix, is forward-filled but NOT back-filled: before the first
+fix it reads 0.
 
 Units are also converted to match SENSOR_FORMAT.md exactly:
   - acceleration, accelerationX/Y/Z : g (frameparser's unit) -> m/s^2
@@ -81,6 +84,7 @@ SCHEMA_FIELDS = [
     "temperature", "pressure", "humidity",
     "gpsLat", "gpsLon", "gpsAlt", "pitch", "roll", "yaw",
     "gasResistance", "busVoltage", "current", "power",
+    "gpsSats",
 ]
 
 # Optional, appended with --kalman: RTS-smoothed estimates from trajectory.py.
@@ -207,6 +211,7 @@ def convert(frames, target_altitude=None, departure_altitude=0.0):
             state["gpsLat"] = -d["gpsLat"] if d.get("gpsLat_N") == "S" else d["gpsLat"]
             state["gpsLon"] = -d["gpsLon"] if d.get("gpsLon_W") == "W" else d["gpsLon"]
             state["gpsAlt"] = d.get("gpsAlt", state["gpsAlt"])
+            state["gpsSats"] = d.get("sat_count", state["gpsSats"])
             if first_gps_row is None:
                 first_gps_row = len(rows)
         if "horizontalVelocity" in d:

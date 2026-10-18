@@ -1,0 +1,29 @@
+# Pi-LOG Filter Lab
+#
+#   cd FilterLab
+#   docker compose up -d --build
+#   open http://<server>:5050
+#
+# Site-specific paths go in a .env file next to this one:
+#   LAB_PORT=5050
+#   LAB_RECORDINGS_PATH=/srv/pilog/recordings     .bin/.json recordings (SD cards, captures)
+#   PILOG_DATA_PATH=/srv/pilog/data               the Dashboard's flight folders
+services:
+  filterlab:
+    build:
+      context: ..                      # the repository root, see Dockerfile
+      dockerfile: FilterLab/Dockerfile
+    image: pilog-filterlab:latest
+    container_name: pilog-filterlab
+    restart: unless-stopped
+    ports:
+      - "${LAB_PORT:-5050}:5050"
+    volumes:
+      # Read-only: the lab never modifies a recording.
+      - ${LAB_RECORDINGS_PATH:-../SD-Parser}:/recordings:ro
+      - ${PILOG_DATA_PATH:-../Dashboard/Backend/data}:/dashboard-data:ro
+      # Uploads, recipes saved for the team, parse caches.
+      - lab-data:/lab-data
+
+volumes:
+  lab-data:

@@ -63,6 +63,9 @@ SCHEMA = [
     "gpsLat", "gpsLon", "gpsAlt", "pitch", "roll", "yaw",
     "gasResistance", "busVoltage", "current", "power",
 ]
+# Newer columns (gpsSats, kf*, ...) are deliberately NOT in SCHEMA: they come in
+# by header name where a file has them, and stay absent - "unknown" rather than
+# a default 0 - in older files.
 
 # Values used when a column is absent from a file -- same defaults the original
 # positional parser used, so old files render exactly as before.

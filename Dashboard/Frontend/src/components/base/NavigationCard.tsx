@@ -53,7 +53,7 @@ const NavigationCard: Component<NavigationCardProps> = (props) => {
                     precision={1}
                 />
             </div>
-            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div class="grid grid-cols-1 sm:grid-cols-[1fr_1fr_auto] gap-3">
                 <MetricStat
                     label="Latitude"
                     value={props.latitude}
@@ -65,6 +65,12 @@ const NavigationCard: Component<NavigationCardProps> = (props) => {
                     value={props.longitude}
                     unit="deg"
                     precision={5}
+                />
+                <MetricStat
+                    label="Satellites"
+                    value={props.satellites}
+                    precision={0}
+                    class="sm:min-w-36"
                 />
             </div>
             <div class="flex flex-wrap gap-3">

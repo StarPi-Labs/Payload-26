@@ -6,6 +6,8 @@ export interface NavigationCardProps {
     horizontalVelocity?: number | null
     latitude?: number | null
     longitude?: number | null
+    /** satellites used in that fix */
+    satellites?: number | null
     gpsFix?: boolean | null
     class?: string
 }
