@@ -1,21 +1,20 @@
 """
-Recordings the lab can open, and turning them into signals.
+The recordings the lab can open, and turning them into signals.
 
-Kinds (all read-only):
-  raw        .bin (SD card fly.bin, P4 SD backup RX_nnnn.BIN, wired UART capture)
-             and .json (bin2json.py output): the rawest data there is - every
-             sensor at its own rate, converted to physical units by frameparser
-             exactly as everywhere else, nothing merged, forward-filled or
-             derived.
-  upload     a .bin/.json dropped into the lab, kept in its data folder.
-  dashboard  a Dashboard flight's telemetry file: already merged and
-             forward-filled at frame rate. Each sensor is de-duplicated back to
-             its own samples; the Dashboard's derived columns come along as
-             dash.* for comparison.
+The lab works on processed but not yet cleaned data: the JSON files bin2json.py
+writes, one dict per decoded frame. Every value is already in physical units
+(frameparser.py did the conversion, with the payload's calibration frame), but
+nothing is merged, forward-filled, smoothed or derived. Every sensor keeps its
+own samples at its own rate. That is the starting point a filter should see.
 
-Parsing a big recording takes a while (a 200 MB .bin is about a minute), so
-the result is cached as .npz in the lab's data folder, keyed by path, size and
-modification time.
+    FilterLab/recordings/       the lab's recordings directory - drop .json files here
+    <lab data>/uploads/         files uploaded through the editor
+
+A .bin goes through bin2json.py first:
+    python SD-Parser/bin2json.py --source fly.bin --output FilterLab/recordings/fly.json
+
+Reading a big JSON takes a while (about a minute per GB), so the result is cached
+as .npz in the lab's data folder, keyed by path, size and modification time.
 """
 import contextlib
 import hashlib
@@ -34,27 +33,22 @@ from .signals import BlockError, Signal
 pilog_reader = shared.pilog_reader
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-_REPO = os.path.abspath(os.path.join(_HERE, "..", "..", ".."))
+_LAB = os.path.abspath(os.path.join(_HERE, "..", ".."))          # the FilterLab folder
 
 RECORDINGS_DIR = os.path.abspath(os.environ.get(
-    "PILOG_RECORDINGS_DIR", os.path.join(_REPO, "SD-Parser")))
-DASHBOARD_DATA_DIR = os.path.abspath(os.environ.get(
-    "PILOG_DASHBOARD_DATA_DIR", os.path.join(_REPO, "Dashboard", "Backend", "data")))
+    "PILOG_RECORDINGS_DIR", os.path.join(_LAB, "recordings")))
 LAB_DATA_DIR = os.path.abspath(os.environ.get(
-    "PILOG_LAB_DATA_DIR", os.path.join(_REPO, "FilterLab", "lab-data")))
+    "PILOG_LAB_DATA_DIR", os.path.join(_LAB, "lab-data")))
 UPLOAD_DIR = os.path.join(LAB_DATA_DIR, "uploads")
 CACHE_DIR = os.path.join(LAB_DATA_DIR, "cache")
 
-RAW_EXTENSIONS = (".bin", ".json")
-DASHBOARD_EXTENSIONS = (".txt", ".csv", ".log")
-FLIGHT_ID_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
-SKIP_DIRS = {"node_modules", ".cache", "__pycache__", ".git", "cache", "build"}
-CACHE_VERSION = 1
-G0 = 9.80665
-MODE_NAMES = ["INIT", "POST", "SNSCHK", "ARMED", "BOOST", "COAST"]
+EXTENSIONS = (".json",)
+# Not recordings: outputs of the SD-Parser tools that may sit in the same folder.
+SKIP_SUFFIXES = ("_summary.json", "_noise.json", "calibration.json")
+SKIP_DIRS = {"node_modules", ".cache", "__pycache__", ".git", "cache"}
+CACHE_VERSION = 2
 SESSION_GAP_MS = 5000
 
-# frameparser keeps conversion state in module globals: one parse at a time.
 _parse_lock = threading.Lock()
 
 
@@ -62,10 +56,15 @@ _parse_lock = threading.Lock()
 # Listing
 # ---------------------------------------------------------------------------
 
-def _entry(rid, path, kind, label, group):
+def _entry(rid, path, label, group):
     st = os.stat(path)
-    return {"id": rid, "kind": kind, "label": label, "group": group,
-            "size": st.st_size, "modified": st.st_mtime, "path": path}
+    return {"id": rid, "label": label, "group": group, "size": st.st_size,
+            "modified": st.st_mtime, "path": path}
+
+
+def _is_recording(name):
+    low = name.lower()
+    return low.endswith(EXTENSIONS) and not low.endswith(SKIP_SUFFIXES) and not name.startswith(".")
 
 
 def list_recordings():
@@ -74,29 +73,16 @@ def list_recordings():
     out = []
     if os.path.isdir(RECORDINGS_DIR):
         for root, dirs, files in os.walk(RECORDINGS_DIR):
-            dirs[:] = [d for d in dirs if d not in SKIP_DIRS and not d.startswith(".")]
-            if os.path.relpath(root, RECORDINGS_DIR).count(os.sep) >= 2:
-                dirs[:] = []
+            dirs[:] = sorted(d for d in dirs if d not in SKIP_DIRS and not d.startswith("."))
             for f in sorted(files):
-                if f.lower().endswith(RAW_EXTENSIONS) and not f.endswith("_summary.json") \
-                        and not f.endswith("_noise.json"):
+                if _is_recording(f):
                     rel = os.path.relpath(os.path.join(root, f), RECORDINGS_DIR).replace(os.sep, "/")
-                    out.append(_entry("raw/" + rel, os.path.join(root, f), "raw", rel, "Recordings"))
+                    out.append(_entry("rec/" + rel, os.path.join(root, f), rel, "Recordings"))
     if os.path.isdir(UPLOAD_DIR):
         for f in sorted(os.listdir(UPLOAD_DIR)):
             p = os.path.join(UPLOAD_DIR, f)
-            if os.path.isfile(p) and f.lower().endswith(RAW_EXTENSIONS):
-                out.append(_entry("upload/" + f, p, "raw", f, "Uploaded"))
-    if os.path.isdir(DASHBOARD_DATA_DIR):
-        for flight in sorted(os.listdir(DASHBOARD_DATA_DIR), reverse=True):
-            tdir = os.path.join(DASHBOARD_DATA_DIR, flight, "telemetry")
-            if not FLIGHT_ID_RE.match(flight) or not os.path.isdir(tdir):
-                continue
-            for f in sorted(os.listdir(tdir)):
-                p = os.path.join(tdir, f)
-                if os.path.isfile(p) and f.lower().endswith(DASHBOARD_EXTENSIONS) and not f.startswith("."):
-                    out.append(_entry(f"dash/{flight}/{f}", p, "dashboard",
-                                      f"{flight} / {f}", "Dashboard flights"))
+            if os.path.isfile(p) and _is_recording(f):
+                out.append(_entry("upload/" + f, p, f, "Uploaded"))
     return out
 
 
@@ -110,8 +96,9 @@ def resolve(rid):
 def safe_upload_name(name):
     base = os.path.basename(name or "")
     stem, ext = os.path.splitext(base)
-    if ext.lower() not in RAW_EXTENSIONS:
-        raise ValueError("only .bin and .json recordings can be uploaded")
+    if ext.lower() not in EXTENSIONS:
+        raise ValueError("only bin2json .json recordings can be uploaded "
+                         "(convert a .bin with SD-Parser/bin2json.py first)")
     stem = re.sub(r"[^A-Za-z0-9_.-]+", "_", stem).strip("._") or "recording"
     return stem[:80] + ext.lower()
 
@@ -132,9 +119,9 @@ STREAMS = {
 
 
 def _collect_frames(frames):
-    """Per-sensor arrays from bin2json-style frame dicts, in recording order.
-    The onboard clock restarts at every reboot, so time running backwards
-    starts a new session (as in pilog_reader)."""
+    """Per-sensor arrays from bin2json frame dicts, in recording order. The
+    onboard clock restarts at every reboot, so time running backwards starts a
+    new session (as in pilog_reader)."""
     bufs = {k: {f: [] for f in fields} for k, fields in STREAMS.items()}
     calib = None
     sessions = []
@@ -173,6 +160,7 @@ def _collect_frames(frames):
             fixed = d["gpsLock"] == "A" and "gpsLat" in d
             add("fix", t=t, fix=1.0 if fixed else 0.0, session=session)
             if fixed:
+                # frameparser keeps the hemisphere as a letter: south and west are negative
                 lat = d["gpsLat"] * (-1.0 if d.get("gpsLat_N") == "S" else 1.0)
                 lon = d.get("gpsLon", np.nan) * (-1.0 if d.get("gpsLon_W") == "W" else 1.0)
                 add("gps", t=t, lat=lat, lon=lon, alt=d.get("gpsAlt", np.nan),
@@ -192,120 +180,13 @@ def _collect_frames(frames):
     return arrays, {"calib": calib, "sessions": sessions, "frames": seen}
 
 
-def _load_raw(path):
+def _load_json(path):
     stats = pilog_reader._Stats()
     with _parse_lock, contextlib.redirect_stdout(io.StringIO()):
-        arrays, meta = _collect_frames(pilog_reader.iter_frames(path, stats))
-    meta["crcFailures"] = stats.crc_failures
+        arrays, meta = _collect_frames(pilog_reader.iter_frames_json(path, stats))
+    if meta["frames"] == 0:
+        raise BlockError("no frames in this file - is it a bin2json.py output?")
     return arrays, meta
-
-
-# Dashboard telemetry columns the lab uses. Read only these, and sensor values as
-# float32: a 20-hour file (9 million rows) then parses in about half the time
-# and memory. Time and GPS keep float64 (ms over hours, 1e-7 degrees).
-DASHBOARD_COLUMNS = ["time", "accelerationX", "accelerationY", "accelerationZ", "roll", "pitch", "yaw",
-                     "pressure", "temperature", "humidity", "gasResistance", "gpsLat", "gpsLon", "gpsAlt",
-                     "horizontalVelocity", "busVoltage", "current", "altitude", "velocity",
-                     "kfAltitude", "kfVerticalVelocity", "kfHorizontalVelocity"]
-FLOAT64_COLUMNS = {"time", "gpsLat", "gpsLon"}
-
-
-def _load_dashboard(path):
-    """Undo the forward-fill of a Dashboard telemetry file, sensor by sensor."""
-    import pandas as pd
-    header = {}
-    columns = []
-    with open(path, "r", encoding="utf-8", errors="replace") as f:
-        for line in f:
-            if line.startswith("#"):
-                m = re.match(r"^#\s*([A-Za-z0-9_]+)\s*=\s*(.+)$", line.strip())
-                if m:
-                    header[m.group(1)] = m.group(2).strip()
-            elif line.strip():
-                columns = [c.strip() for c in line.split(",")]
-                break
-    wanted = [c for c in DASHBOARD_COLUMNS if c in columns]
-    try:
-        df = pd.read_csv(path, comment="#", engine="c", usecols=wanted,
-                         dtype={c: ("float64" if c in FLOAT64_COLUMNS else "float32") for c in wanted})
-    except (ValueError, TypeError):
-        # a damaged line somewhere: the slow, tolerant way
-        df = pd.read_csv(path, comment="#", engine="c", on_bad_lines="skip", usecols=wanted)
-    df.columns = [c.strip() for c in df.columns]
-    t = pd.to_numeric(df["time"], errors="coerce").to_numpy(np.float64)
-    order = np.argsort(t, kind="stable")
-    df = df.iloc[order]
-    t = t[order]
-
-    def col(name):
-        if name not in df:
-            return None
-        s = df[name]
-        return (s if s.dtype.kind == "f" else pd.to_numeric(s, errors="coerce")).to_numpy()
-
-    def fresh(*cols):
-        """Rows where any of these columns changed: the sensor's own samples."""
-        cols = [c for c in cols if c is not None]
-        if not cols:
-            return np.zeros(len(t), bool)
-        m = np.zeros(len(t), bool)
-        m[0] = True
-        for c in cols:
-            m[1:] |= c[1:] != c[:-1]
-        return m
-
-    arrays = {}
-
-    def take(stream, mask, **fields):
-        arrays[f"{stream}__t"] = t[mask]
-        arrays[f"{stream}__session"] = np.zeros(int(mask.sum()))
-        for f, values in fields.items():
-            arrays[f"{stream}__{f}"] = values[mask] if values is not None else np.full(int(mask.sum()), np.nan)
-
-    ax, ay, az = col("accelerationX"), col("accelerationY"), col("accelerationZ")
-    gx, gy, gz = col("roll"), col("pitch"), col("yaw")
-    if ax is not None:
-        m = fresh(ax, ay, az, gx, gy, gz) & ((ax != 0) | (ay != 0) | (az != 0))
-        take("imu", m, ax=ax / G0, ay=ay / G0, az=az / G0, gx=gx, gy=gy, gz=gz, temp=None)
-    p, tc, h = col("pressure"), col("temperature"), col("humidity")
-    if p is not None:
-        m = fresh(p, tc, h)
-        m[0] = False                                   # json2telemetry's placeholder row
-        m &= ~((p == 101.3) & (tc == 20.0) & (h == 50.0))
-        take("baro", m, pressure=p, temperature=tc, humidity=h)
-    gas = col("gasResistance")
-    if gas is not None:
-        m = fresh(gas) & (gas > 0)
-        take("gas", m, resistance=gas)
-    lat, lon = col("gpsLat"), col("gpsLon")
-    if lat is not None:
-        m = fresh(lat, lon, col("gpsAlt")) & ((lat != 0) | (lon != 0))
-        take("gps", m, lat=lat, lon=lon, alt=col("gpsAlt"), speed=col("horizontalVelocity"), sats=None)
-    v, i = col("busVoltage"), col("current")
-    if v is not None:
-        m = fresh(v, i) & ((v != 0) | (i != 0))
-        take("power", m, voltage=v, current=i)
-    modes = []
-    for part in (header.get("modeTransitions") or "").split(","):
-        if ":" in part:
-            ts, name = part.split(":", 1)
-            try:
-                modes.append((float(ts), float(MODE_NAMES.index(name.strip()))))
-            except ValueError:
-                pass
-    arrays["mode__t"] = np.array([m[0] for m in modes])
-    arrays["mode__mode"] = np.array([m[1] for m in modes])
-    arrays["mode__session"] = np.zeros(len(modes))
-    # The Dashboard's own derived columns, to compare a recipe against.
-    for name in ("altitude", "velocity", "kfAltitude", "kfVerticalVelocity", "kfHorizontalVelocity"):
-        c = col(name)
-        if c is not None:
-            arrays[f"dash__{name}"] = c
-    arrays["dash__t"] = t
-    sessions = [{"id": 0, "t_start": float(t[0]) if len(t) else 0.0,
-                 "t_end": float(t[-1]) if len(t) else 0.0, "frames": int(len(t))}]
-    return arrays, {"calib": None, "sessions": sessions, "frames": int(len(t)),
-                    "crcFailures": 0, "header": header}
 
 
 def load(rid):
@@ -325,9 +206,8 @@ def load(rid):
         except (OSError, ValueError, KeyError):
             pass                                       # rebuild a damaged cache
     t0 = time.time()
-    arrays, meta = (_load_dashboard(path) if rec["kind"] == "dashboard" else _load_raw(path))
-    meta.update({"id": rid, "kind": rec["kind"], "label": rec["label"],
-                 "loadSeconds": round(time.time() - t0, 2)})
+    arrays, meta = _load_json(path)
+    meta.update({"id": rid, "label": rec["label"], "loadSeconds": round(time.time() - t0, 2)})
     try:
         os.makedirs(CACHE_DIR, exist_ok=True)
         tmp = cache_path + f".tmp{os.getpid()}.npz"
@@ -361,16 +241,9 @@ SIGNALS = [
     ("gps", "lon", "gps.lon", "°", "GPS longitude (east positive)", False),
     ("gps", "alt", "gps.alt", "m", "GPS altitude above sea level", False),
     ("gps", "speed", "gps.speed", "m/s", "GPS ground speed", False),
-    ("gps", "sats", "gps.sats", "", "satellites used", True),
+    ("gps", "sats", "gps.sats", "", "satellites used in the fix", True),
     ("fix", "fix", "gps.fix", "", "GPS fix (1) or searching (0)", True),
     ("mode", "mode", "mode", "", "flight mode: 0 INIT 1 POST 2 SNSCHK 3 ARMED 4 BOOST 5 COAST", True),
-]
-DASH_SIGNALS = [
-    ("altitude", "dash.altitude", "m", "Dashboard: barometric altitude"),
-    ("velocity", "dash.velocity", "m/s", "Dashboard: vertical speed (difference of altitude)"),
-    ("kfAltitude", "dash.kfAltitude", "m", "Dashboard: Kalman/RTS altitude"),
-    ("kfVerticalVelocity", "dash.kfVerticalVelocity", "m/s", "Dashboard: Kalman/RTS vertical speed"),
-    ("kfHorizontalVelocity", "dash.kfHorizontalVelocity", "m/s", "Dashboard: Kalman/RTS horizontal speed"),
 ]
 
 
@@ -401,8 +274,4 @@ def to_signals(arrays, meta, session):
         if not np.any(keep) or not np.any(np.isfinite(v[keep])):
             continue
         out.append(Signal(name, t[keep], v[keep], unit, desc, step=step))
-    if "dash__t" in arrays:
-        for field, name, unit, desc in DASH_SIGNALS:
-            if f"dash__{field}" in arrays:
-                out.append(Signal(name, arrays["dash__t"], arrays[f"dash__{field}"], unit, desc))
     return out
