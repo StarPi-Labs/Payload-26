@@ -1,9 +1,12 @@
 CONFIG_IDF_TARGET="esp32p4"
 
-# The P4 has no radio: Wi-Fi APIs are proxied to the on-board ESP32-C6 over
-# SDIO by esp-hosted. This is what makes esp_hosted_register_rx_callback_custom_data()
-# available for the ESP-NOW telemetry coming up from the C6.
-CONFIG_ESP_WIFI_ENABLED=y
+# The P4 has no radio. esp-hosted 3.0.9 talks to the on-board ESP32-C6 over
+# SDIO; the board preset sets this kit's SDIO pins and the C6 reset line
+# (GPIO54). Peer data is opt-in on the host and carries the rocket telemetry.
+CONFIG_ESP_HOSTED_P4_DEV_BOARD_FUNC_BOARD=y
+CONFIG_ESP_HOSTED_CP_TARGET_ESP32C6=y
+CONFIG_ESP_HOSTED_HOST_TRANSPORT_BUS_SDIO=y
+CONFIG_ESP_HOSTED_HOST_FEAT_PEER_DATA=y
 
 # 32 MB PSRAM on the ESP32-P4-Function-EV-Board. LVGL draw buffers for a
 # 1024x600 panel do not fit in internal RAM.
@@ -11,11 +14,30 @@ CONFIG_SPIRAM=y
 CONFIG_SPIRAM_MODE_HEX=y
 CONFIG_SPIRAM_SPEED_200M=y
 
-# 16 MB flash on this board.
+# 16 MB flash on this board, with a 4 MB app slot (see partitions.csv) - the
+# app is already past the default 1 MB.
 CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 
 # LVGL needs headroom; the default 3.5 kB main task stack overflows during
 # widget creation.
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
 
 CONFIG_FREERTOS_HZ=1000
+
+# LVGL allocates through the system heap (PSRAM-backed) instead of its small
+# built-in pool: six screens and ten graphs do not fit in the latter.
+CONFIG_LV_USE_CLIB_MALLOC=y
+
+# SD backup: same FATFS tuning as Espressif's esp_hosted example that shares
+# the SDMMC controller between the C6 link and an SD card.
+CONFIG_FATFS_VFS_FSTAT_BLKSIZE=4096
+
+# Every font size ui.c uses. LVGL compiles in only 14 pt by default; a missing
+# one is a compile error, not a silent fallback.
+CONFIG_LV_FONT_MONTSERRAT_14=y
+CONFIG_LV_FONT_MONTSERRAT_16=y
+CONFIG_LV_FONT_MONTSERRAT_20=y
+CONFIG_LV_FONT_MONTSERRAT_28=y
+CONFIG_LV_FONT_MONTSERRAT_48=y

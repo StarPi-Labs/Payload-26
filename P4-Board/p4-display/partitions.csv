@@ -1,0 +1,6 @@
+# Pi-LOG P4 live display - 16 MB flash.
+# One large app slot: LVGL + the board support package + esp-hosted is already
+# ~1.1 MB, past the 1 MB default, and the UI will grow (touch pages, map).
+# Name,   Type, SubType, Offset,  Size
+nvs,      data, nvs,     0x9000,  0x6000
+factory,  app,  factory, 0x10000, 4M

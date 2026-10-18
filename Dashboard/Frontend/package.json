@@ -14,6 +14,7 @@
     "@tailwindcss/vite": "^4.1.13",
     "@types/leaflet": "^1.9.21",
     "@types/node": "^25.0.9",
+    "@types/three": "^0.186.0",
     "daisyui": "^5.5.14",
     "solid-devtools": "^0.34.3",
     "tailwindcss": "^4.1.13",
@@ -25,6 +26,7 @@
     "@solidjs/router": "^0.15.4",
     "leaflet": "^1.9.4",
     "solid-icons": "^1.2.0",
-    "solid-js": "^1.9.9"
+    "solid-js": "^1.9.9",
+    "three": "^0.186.1"
   }
 }

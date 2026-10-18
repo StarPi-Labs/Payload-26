@@ -4,7 +4,7 @@
 #include "health_monitoring.h"
 #include "frame_logger.h"
 #include "systemp2i.h"
-#include "bt_serial_bridge.h"
+#include "telemetry_uart.h"
 
 #include "esp_log.h" // debug
 
@@ -81,7 +81,7 @@ hm_send(
     xSemaphoreGive(buf->ready);
 }
 
-#define BT_TX_CHUNK_SIZE        128
+#define UART_TX_CHUNK_SIZE        128
 /*
  * This is a loosy/forgiven task. Missing a sample or some is acceptable. However,
  * what matters the most is to receive some data from those sensors. Additionally,
@@ -91,13 +91,13 @@ hm_send(
 void health_monitoring_task(void *arg) {
    struct TaskParams *tparams = (struct TaskParams *) arg;
     HMBuffer *buf = tparams->hm_buffer;
-    uint8_t tx_chunk[BT_TX_CHUNK_SIZE];
+    uint8_t tx_chunk[UART_TX_CHUNK_SIZE];
     uint16_t chunk_len = 0;
     
     while(1) {
         xSemaphoreTake(buf->ready, portMAX_DELAY);
         xSemaphoreTake(buf->lock, portMAX_DELAY);
-        while (buf->tail != buf->head && chunk_len < BT_TX_CHUNK_SIZE) {
+        while (buf->tail != buf->head && chunk_len < UART_TX_CHUNK_SIZE) {
             tx_chunk[chunk_len] = buf->data[buf->tail];
             buf->tail = (buf->tail + 1) % HM_BUFFER_SZ;
             chunk_len++;
@@ -105,7 +105,7 @@ void health_monitoring_task(void *arg) {
         xSemaphoreGive(buf->lock);
 
         if (chunk_len > 0) {
-            bt_serial_write_chunk(tx_chunk, chunk_len);
+            telemetry_uart_write(tx_chunk, chunk_len);
             chunk_len = 0;
         }
     }

@@ -13,6 +13,7 @@ gps_time_fix = 0.0  # carries the GPS time: TODO: implement synchronization
 # --- 2. INA219 CONFIGURATIONS ---
 INA219_MAX_VOLT = 16.0
 INA219_ADC_BITS = 2**12
+INA219_BUS_LSB_V = 0.004   # bus voltage step size per the datasheet
 INA219_SHUNT_OMH= 0.1          # default; overridden by the calibration frame
 
 # PACKET TYPES:
@@ -216,7 +217,10 @@ def proc_ina219(ddict, draw):
     """
     
     ddict['shunt_mVolts'] = draw[0] / 100.0
-    ddict['bus_volts'] = draw[1] * INA219_MAX_VOLT / INA219_ADC_BITS
+    # 4 mV per LSB (INA219 datasheet SBOS448G, "Bus voltage, 1 LSB step size");
+    # the firmware already shifted out the 3 status bits. The old
+    # 16 V / 4096 = 3.906 mV scaling read 2.4 % low.
+    ddict['bus_volts'] = draw[1] * INA219_BUS_LSB_V
     ddict['current'] = ddict['shunt_mVolts'] / INA219_SHUNT_OMH
         
 def proc_bme680(ddict, draw):

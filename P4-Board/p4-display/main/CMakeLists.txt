@@ -1,7 +1,7 @@
 idf_component_register(
-    SRCS "main.c" "ui.c"
+    SRCS "main.c" "ui.c" "sd_backup.c"
     # ../../common holds pilog_link.h, shared verbatim with the rocket firmware
     # and the C6 bridge.
     INCLUDE_DIRS "." "../../common"
-    REQUIRES telemetry_codec esp_timer
+    REQUIRES telemetry_codec esp_timer nvs_flash fatfs sdmmc esp_driver_sdmmc
 )

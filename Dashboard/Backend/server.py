@@ -6,6 +6,9 @@ DATA_DIR:
 
     data/<YYYY-MM-DD>/telemetry/*.txt|csv|log
     data/<YYYY-MM-DD>/videos/*.mp4|avi|mov|mkv
+    data/<YYYY-MM-DD>/model/*.glb|gltf     optional rocket model for this flight
+    data/models/*.glb|gltf                 default rocket model for every flight
+                                           (see Documentation/ROCKET_MODEL.md)
 
 Large recordings are handled by telemetry_store.py: flights are listed from
 header/tail reads only, telemetry is served from a per-file column cache, and
@@ -26,6 +29,7 @@ Command line:
     python server.py --build-cache 2026-09-16
 """
 import argparse
+import json
 import os
 import re
 import sys
@@ -47,6 +51,16 @@ DEFAULT_MAX_POINTS = 20000
 ALLOWED_VIDEO_EXTENSIONS = {"mp4", "avi", "mov", "mkv"}
 RAW_TELEMETRY_LIMIT_BYTES = 20 * 1024 * 1024
 FLIGHT_ID_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+# Rocket model for the attitude view. Not a date, so never listed as a flight.
+MODELS_DIRNAME = "models"
+MODEL_EXTENSIONS = {"glb", "gltf"}
+MODEL_CONFIG_NAMES = ("rocket.json", "model.json")
+# Which model axes are the rocket's nose and front (the side away from the
+# rail). The defaults fit a rocket modelled standing upright in SolidWorks,
+# whose Front view looks at the side opposite the rail.
+MODEL_CONFIG_KEYS = ("noseAxis", "frontAxis", "pivot")
+DEFAULT_MODEL_CONFIG = {"noseAxis": "+Y", "frontAxis": "+Z"}
 
 app = Flask(__name__, static_folder=STATIC_DIR)
 CORS(app)
@@ -195,6 +209,70 @@ def list_videos(flight_id):
 def serve_video(flight_id, filename):
     videos_dir = os.path.join(flight_dir_or_404(flight_id), "videos")
     return send_from_directory(videos_dir, filename)   # traversal-safe
+
+
+# ============================================================================
+# Rocket model
+# ============================================================================
+
+def find_model(folder):
+    """(model file name, config dict) in a model folder, or None.
+
+    The config file is optional; without one the folder's first .glb/.gltf
+    is used with DEFAULT_MODEL_CONFIG.
+    """
+    if not os.path.isdir(folder):
+        return None
+    config = {}
+    for name in MODEL_CONFIG_NAMES:
+        config_path = os.path.join(folder, name)
+        if os.path.isfile(config_path):
+            try:
+                with open(config_path, "r", encoding="utf-8") as f:
+                    loaded = json.load(f)
+                config = loaded if isinstance(loaded, dict) else {}
+            except (OSError, ValueError):
+                app.logger.warning("ignoring unreadable model config %s", config_path)
+            break
+    model = config.get("model")
+    if not (isinstance(model, str) and allowed_file(model, MODEL_EXTENSIONS)
+            and os.path.isfile(os.path.join(folder, model))):
+        candidates = sorted(f for f in os.listdir(folder) if allowed_file(f, MODEL_EXTENSIONS))
+        if not candidates:
+            return None
+        # A self-contained .glb beats a .gltf that needs side files.
+        model = next((f for f in candidates if f.lower().endswith(".glb")), candidates[0])
+    return model, config
+
+
+@app.route("/api/flights/<flight_id>/model", methods=["GET"])
+def get_model(flight_id):
+    """Which rocket model the attitude view should draw for this flight:
+    the flight's own model/ folder first, then data/models/. 404 = none, the
+    frontend then draws a generic rocket."""
+    flight_dir = flight_dir_or_404(flight_id)
+    places = ((os.path.join(flight_dir, "model"), f"/api/flights/{flight_id}/model/files/"),
+              (os.path.join(DATA_DIR, MODELS_DIRNAME), "/api/models/"))
+    for folder, base_url in places:
+        found = find_model(folder)
+        if found:
+            model, config = found
+            result = dict(DEFAULT_MODEL_CONFIG)
+            result.update({k: config[k] for k in MODEL_CONFIG_KEYS if k in config})
+            result["url"] = base_url + model
+            return jsonify(result)
+    return jsonify({"error": "no rocket model"}), 404
+
+
+@app.route("/api/flights/<flight_id>/model/files/<path:filename>", methods=["GET"])
+def serve_flight_model(flight_id, filename):
+    # path: so a .gltf can pull its .bin and textures from subfolders
+    return send_from_directory(os.path.join(flight_dir_or_404(flight_id), "model"), filename)
+
+
+@app.route("/api/models/<path:filename>", methods=["GET"])
+def serve_default_model(filename):
+    return send_from_directory(os.path.join(DATA_DIR, MODELS_DIRNAME), filename)
 
 
 # ============================================================================

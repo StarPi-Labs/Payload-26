@@ -40,6 +40,27 @@ The json file is just the direct translation of the python dictionary in `vanill
 
 
 
+## Calibrating the IMU
+
+`imu_calibration.py` solves the accelerometer's offset and scale from a
+recording of the payload held still in six poses, and the gyro's scale from
+counted turns. The procedure is in `Documentation/CALIBRATION.md`.
+
+```
+python3 imu_calibration.py RX_0001.BIN --output calibration.json
+python3 imu_calibration.py turns.bin --gyro-turns 10
+```
+
+The same solver is a block in the Filter Lab (`FilterLab/`), where you can also
+build and compare filters on any recording without writing code.
+
+## GPS coordinates
+
+`json2telemetry.py` applies the hemisphere letters, so south and west come out
+negative. Older Dashboard flights converted before Oct 2026 had positive
+longitudes even west of Greenwich (no effect around Pisa, but EuRoC in Portugal
+is 8.2° W): re-run `json2telemetry.py` for those.
+
 ## Running for health monitoring
 
 1. (Ubuntu based) Run from file
@@ -52,13 +73,13 @@ $ python3 vanilla-websocket.py --type file --source armed_file_gps.bin
 2. (Ubuntu based) run from serial
 
 ``` bash
-$ python3 vanilla-websocket.py --type serial --source /dev/rfcomm0
+$ python3 vanilla-websocket.py --type serial --source /dev/ttyUSB0
 ```
 
 ## Observation:
 
-In linux, the bluetooth has to be bound to a "/dev" directory that acts as serial port, run this:
-
-``` bash
-$ sudo rfcomm bind 0 <ESP32 MAC ADDRESS>
-```
+The payload has **no Bluetooth** any more (the ESP32-S3 has no Classic
+Bluetooth, and the stack was removed in Oct 2026). Live data reaches a PC over
+the wired telemetry UART — the DevKit's "UART" USB port, 115200 baud
+(`/dev/ttyUSB0` on Linux, a `COMx` port on Windows) — and reaches the P4 ground
+station over ESP-NOW. See `Embedded-Code/CHANGES.md`, "Telemetry transports".

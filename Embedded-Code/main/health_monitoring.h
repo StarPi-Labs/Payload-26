@@ -4,7 +4,7 @@
 #include <stdint.h>
 #include <string.h>
 
-#include "bt_serial_bridge.h"
+#include "telemetry_uart.h"
 
 typedef struct HMBuffer HMBuffer;
 

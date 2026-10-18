@@ -43,6 +43,22 @@ typedef enum {
 /** Short label for a mode value ("ARMED", "BOOST", ...). Safe for any input. */
 const char *telemetry_mode_name(uint8_t mode);
 
+/** One entry per sensor stream, for liveness and rate display. */
+typedef enum {
+    TELEM_SENSOR_IMU = 0,   /**< MPU6500 accel + gyro */
+    TELEM_SENSOR_BARO,      /**< BME680 temperature / pressure / humidity */
+    TELEM_SENSOR_GAS,       /**< BME680 gas resistance */
+    TELEM_SENSOR_POWER,     /**< INA219 */
+    TELEM_SENSOR_GPS,       /**< SAM-M10Q, every frame whether fixed or not */
+    TELEM_SENSOR_COUNT
+} telem_sensor_t;
+
+/** Per-sensor frame accounting. */
+typedef struct {
+    uint32_t frames;        /**< frames decoded since the decoder started */
+    uint32_t last_ms;       /**< payload uptime of the newest one */
+} telem_sensor_stat_t;
+
 /**
  * Forward-filled snapshot of every sensor.
  *
@@ -57,6 +73,7 @@ typedef struct {
     float accel_x, accel_y, accel_z;   /**< g */
     float accel_mag;                   /**< g, vector magnitude */
     float roll, pitch, yaw;            /**< deg/s - gyro RATES, not angles */
+    float imu_temp;                    /**< degC, MPU die temperature */
 
     /* BME680 */
     float temperature;          /**< degC */
@@ -67,6 +84,9 @@ typedef struct {
     /* Derived from pressure, referenced to the first sample seen */
     float altitude;             /**< m above the pad */
     float vertical_velocity;    /**< m/s, first difference of altitude */
+    float vv_dt_s;              /**< s, time step behind vertical_velocity */
+    float ref_pressure;         /**< kPa, the altitude reference (first sample) */
+    float ref_temperature;      /**< degC at that moment - for the drift term */
 
     /* GPS */
     double gps_lat, gps_lon;    /**< degrees, signed */
@@ -79,6 +99,9 @@ typedef struct {
     float bus_voltage;          /**< V */
     float current;              /**< mA */
     float power;                /**< W */
+    double energy_wh;           /**< Wh since payload boot - integrated over the
+                                     samples received, the time before the first
+                                     one estimated from it */
 
     /* Flight state */
     uint8_t mode;
@@ -87,6 +110,10 @@ typedef struct {
     uint32_t frames_ok;
     uint32_t frames_crc_fail;
     bool     have_calib;
+
+    /* Per-sensor accounting - lets the ground station tell a silent sensor
+     * from a silent link. */
+    telem_sensor_stat_t sensor[TELEM_SENSOR_COUNT];
 } telem_state_t;
 
 /** Decoder context. Zero-initialise, then call telemetry_codec_init(). */
@@ -117,6 +144,11 @@ typedef struct {
     float    last_alt;
     uint32_t last_alt_ms;
     bool     have_last_alt;
+
+    /* Energy integration state. */
+    float    last_power;        /**< W, previous INA219 sample */
+    uint32_t last_ina_ms;
+    bool     have_last_ina;
 
     telem_state_t state;
 } telemetry_codec_t;

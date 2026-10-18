@@ -6,19 +6,23 @@
 ## "Board Support Package" - the wrong choice builds cleanly and then shows
 ## nothing, which is a confusing way to lose an afternoon.
 dependencies:
-  idf: ">=5.4"
+  idf: ">=5.5"
 
   espressif/esp32_p4_function_ev_board:
     version: "^5"
 
-  ## Wi-Fi/Bluetooth (and our custom-data channel) proxied to the on-board C6.
-  ## Must be version-compatible with the slave firmware flashed on the C6 -
-  ## see P4-Board/c6-slave-espnow/README.md.
+  ## The C6 co-processor link. Pinned, not '*': the C6 firmware in
+  ## P4-Board/c6-slave-espnow/cp pins the same version, and the two halves of
+  ## esp-hosted must match.
   espressif/esp_hosted:
-    version: "*"
+    version: "3.0.9"
 
+  ## Same rule as Espressif's own esp_hosted 3.0.9 host examples.
   espressif/esp_wifi_remote:
-    version: "*"
+    version: ">=1.3.1"
+    rules:
+      - if: "target in [esp32p4, esp32h2]"
+      - if: "idf_version <6.1"
 
   lvgl/lvgl:
     version: "^9"

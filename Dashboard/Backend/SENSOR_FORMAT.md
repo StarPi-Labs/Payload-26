@@ -31,9 +31,9 @@ time,altitude,altitudeMSL,velocity,horizontalVelocity,acceleration,accelerationX
 | gpsLat | GPS latitude | degrees |
 | gpsLon | GPS longitude | degrees |
 | gpsAlt | GPS altitude | meters |
-| pitch | Pitch angle | degrees |
-| roll | Roll angle | degrees |
-| yaw | Yaw angle | degrees |
+| pitch | Gyro rate about the payload's Y axis (not an angle) | deg/s |
+| roll | Gyro rate about the payload's X axis (not an angle) | deg/s |
+| yaw | Gyro rate about the payload's Z axis, the long axis (not an angle) | deg/s |
 | gasResistance | BME680 VOC/air-quality gas sensor reading | ohms |
 | busVoltage | INA219 supply/battery voltage | V |
 | current | INA219 current draw | mA |
@@ -45,6 +45,19 @@ time,altitude,altitudeMSL,velocity,horizontalVelocity,acceleration,accelerationX
 The server reads columns **by header name**, so optional columns may be present
 or absent, and files with fewer columns (like the 2024 sample flight) load with
 defaults for whatever they lack.
+
+### Derived by the server
+
+For flights dated 2026-10-18 or later (IMU in the CAD frame), building a flight's
+column cache also derives these columns for the rocket view (`attitude.py`).
+They are served like the others but never written to your files:
+
+| Column | Description | Unit |
+|--------|-------------|------|
+| attitudeW/X/Y/Z | Orientation quaternion: payload (CAD) frame → fixed pad frame (X towards the viewer, Y right, Z up) | – |
+| padAccelX/Y/Z | Acceleration in the pad frame, gravity removed, smoothed 80 ms | m/s² |
+
+A telemetry file that already has `attitudeW/X/Y/Z` columns keeps its own.
 
 ## Metadata Lines
 

@@ -357,9 +357,9 @@ void sysP2I_init(System *sys) {
         sys->record->boot_count++;
     }
 
-    /* Telemetry transport — wired UART now (LoRa relay later). Init on every
-     * reset reason; on this target the "BT" bridge is a no-RF UART. */
-    bt_serial_init("StarPi-Telemetry");
+    /* Wired telemetry on UART0 (the DevKit's "UART" USB port). Init on every
+     * reset reason. Bluetooth has been removed - ESP-NOW is the radio link. */
+    telemetry_uart_init();
 
     /* Wireless mirror of the same stream: SoftAP + UDP broadcast, for the
      * ESP32-P4 ground display. No-op unless enabled in menuconfig, and it
@@ -507,7 +507,7 @@ void sysP2I_POST(System *sys){
 #endif
 
 #if CONFIG_ENABLE_SD_SPI
-ysxx    if (sys->health & (1 << SD_HEALTH)) {
+    if (sys->health & (1 << SD_HEALTH)) {
         sys->sd_ctxt.card = & sys->card;
         if (ESP_OK == sys_mount_spi_card(SD_PORT, SD_MOUNT_POINT, &sys->sd_ctxt.card)) {
             sys->health |= (1 << FILESYSTEM_HEALTH);

@@ -68,13 +68,22 @@ cross-build:
 docker buildx build --platform linux/arm64 -t pilog-dashboard:latest --load Dashboard
 ```
 
+## Rocket model
+
+The attitude window next to the cameras draws `data/models/rocket.glb` (or
+`data/<flight>/model/rocket.glb` for one flight) from the mounted data folder,
+and a generic rocket while there is none. Copying a model in needs no rebuild,
+just a page reload. How to export it from SolidWorks:
+[Documentation/ROCKET_MODEL.md](../Documentation/ROCKET_MODEL.md).
+
 ## Large recordings
 
 A multi-hour recording is converted once into a column cache (~30 % of the
 telemetry size). With `PILOG_PREBUILD=1` — the default in `docker-compose.yml`
 — that happens for every flight at container start, so the browser never waits.
 
-For reference, the 3.1 GB / 20-hour recording took **26 s** on a desktop PC.
+For reference, the 3.1 GB / 20-hour recording took **26 s** on a desktop PC
+(about 90 s for flights from 18 Oct 2026 on, which also get the attitude pass).
 Expect several times that on a NAS or a Raspberry Pi. Until a cache is ready the
 dashboard shows a progress bar for that flight; every other flight stays usable.
 

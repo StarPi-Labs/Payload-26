@@ -311,7 +311,7 @@ FILE *frame_logger_get_file(void)
 #include "freertos/task.h"
 #include "esp_heap_caps.h"
 #include "esp_timer.h"
-#include "bt_serial_bridge.h"
+#include "telemetry_uart.h"
 #include "telemetry_net.h"
 #include "telemetry_espnow.h"
 #include <stdbool.h>
@@ -451,14 +451,67 @@ esp_err_t logging_init(int *fd, char *filename) {
 static void log_sink(FILE *f, const uint8_t *buf, size_t len)
 {
     if (f) fwrite(buf, 1, len, f);
-    else   bt_serial_write_chunk((uint8_t *)buf, (uint16_t)len);
+    else   telemetry_uart_write(buf, len);
+}
 
-    /* Same bytes over the air as well, best-effort. Both return immediately and
-     * drop rather than blocking, so the SD path above is never gated on a
-     * radio. Each is a no-op unless enabled in menuconfig; enabling both is
-     * fine and sends the identical stream over each. */
-    telemetry_net_send(buf, len);
-    telemetry_espnow_send(buf, len);
+/* Live radio feed (UDP and/or ESP-NOW), independent of the SD cadence.
+ *
+ * The SD only gets a 1 KB slice every 10 s while ARMED, which over the air
+ * would look like a dead link between bursts. So the radios keep their own
+ * cursor into the ring and send every new byte as it arrives - on the pad,
+ * and in flight too unless TELEMETRY_RADIO_OFF_AT_LAUNCH switches them off at
+ * BOOST. A calibration frame is injected every RADIO_CALIB_MS - only once the cursor
+ * has caught up with the head, i.e. on a frame boundary - so a ground station
+ * that starts listening at any moment can convert the raw frames.
+ *
+ * Both sends return immediately and drop rather than block, so the SD path is
+ * never gated on a radio; each is a no-op unless enabled in menuconfig. */
+#define RADIO_CALIB_MS 5000
+
+static void radio_forward(struct LoggerBuffer *b, uint64_t *cursor, int64_t *last_calib,
+                          bool flight)
+{
+    static uint8_t radio_stage[LOG_STAGING];
+
+#if CONFIG_TELEMETRY_RADIO_OFF_AT_LAUNCH
+    /* Launch: the ground link has done its job. Stop feeding the radios and
+     * ask ESP-NOW to switch off - only a flag here; the teardown happens in
+     * the radio's own low-priority task, never in this one. */
+    static bool radio_off = false;
+    if (flight) {
+        if (!radio_off) {
+            telemetry_espnow_shutdown();
+            radio_off = true;
+            ESP_LOGW(TAG, "launch: radio link switching off");
+        }
+        return;
+    }
+#else
+    (void)flight;
+#endif
+
+    xSemaphoreTake(b->lock, portMAX_DELAY);
+    uint64_t head = b->head;
+    if (head - *cursor > b->cap) *cursor = head - b->cap;   /* fell behind: stay live */
+    size_t avail = (size_t)(head - *cursor);
+    size_t chunk = (avail > LOG_STAGING) ? LOG_STAGING : avail;
+    if (chunk) rb_copy(b, *cursor, radio_stage, chunk);
+    xSemaphoreGive(b->lock);
+
+    if (chunk) {
+        telemetry_net_send(radio_stage, chunk);
+        telemetry_espnow_send(radio_stage, chunk);
+        *cursor += chunk;
+    }
+
+    int64_t now = esp_timer_get_time();
+    if (chunk == avail && s_calib_len &&
+        now - *last_calib >= (int64_t)RADIO_CALIB_MS * 1000) {
+        uint16_t n = frame_build(radio_stage, SBIT_CALIB, s_calib_payload, s_calib_len);
+        telemetry_net_send(radio_stage, n);
+        telemetry_espnow_send(radio_stage, n);
+        *last_calib = now;
+    }
 }
 
 void logging_task(void *args) {
@@ -477,6 +530,12 @@ void logging_task(void *args) {
         ESP_LOGW(TAG, "no log file — mirroring the SD stream to telemetry");
     }
 
+    /* Radio cursor starts at the live head: the history is the SD's job. */
+    xSemaphoreTake(b->lock, portMAX_DELAY);
+    uint64_t radio_total = b->head;
+    xSemaphoreGive(b->lock);
+    int64_t  radio_calib = -(int64_t)RADIO_CALIB_MS * 1000;   /* first one immediately */
+
     /* Calibration frame first: every session starts with the constants the
      * ground needs to convert this log's raw frames. */
     if (s_calib_len) {
@@ -489,6 +548,8 @@ void logging_task(void *args) {
     while (1) {
         uint32_t mode = ctx ? ctx->mode : MODE_COAST;
         bool flight = (mode == MODE_BOOST || mode == MODE_COAST);
+
+        radio_forward(b, &radio_total, &radio_calib, flight);
 
         /* Mirror mode only: re-send the calibration frame every ~10 s in EVERY
          * mode, so a PC capture attached at any moment (even mid-COAST) soon

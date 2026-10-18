@@ -15,6 +15,7 @@ import AltitudeGraphCard from "../components/AltitudeGraphCard";
 import AccellerationGraphCard from "../components/AccellerationGraphCard";
 import AltitudeTracker from "../components/AltitudeTracker";
 import VideoPlayer from "../components/VideoPlayer";
+import RocketView from "../components/RocketView";
 import RocketMapCard from "../components/RocketMapCard"
 import PowerGraphCard from "../components/PowerGraphCard"
 import FlightSelector from "../components/base/FlightSelector";
@@ -75,6 +76,13 @@ const Dashboard: Component = () => {
         busVolt: 0,
         current: 0,
         power: 0,
+        qw: 0,
+        qx: 0,
+        qy: 0,
+        qz: 0,
+        padAx: 0,
+        padAy: 0,
+        padAz: 0,
     };
 
     const [sample, setSample] = createSignal<AtmosphericSample>(emptySample);
@@ -130,6 +138,10 @@ const Dashboard: Component = () => {
         "temp", "pres", "rh",
         "accelX", "accelY", "accelZ",
         "gasRes", "busVolt", "current", "power",
+        // Quaternion components interpolate fine between close samples; the
+        // rocket view renormalises.
+        "qw", "qx", "qy", "qz",
+        "padAx", "padAy", "padAz",
     ];
 
     function mapTelemetryPointToSample(pt: any): AtmosphericSample {
@@ -162,6 +174,13 @@ const Dashboard: Component = () => {
             busVolt: pt.busVoltage ?? pt.busVolt ?? 0,
             current: pt.current ?? 0,
             power: pt.power ?? 0,
+            qw: pt.attitudeW ?? 0,
+            qx: pt.attitudeX ?? 0,
+            qy: pt.attitudeY ?? 0,
+            qz: pt.attitudeZ ?? 0,
+            padAx: pt.padAccelX ?? 0,
+            padAy: pt.padAccelY ?? 0,
+            padAz: pt.padAccelZ ?? 0,
         };
     }
 
@@ -695,13 +714,26 @@ const Dashboard: Component = () => {
                 gpsFix={sample().gps}
             />
 
-            <div class="grid grid-cols-1 lg:grid-cols-4 gap-4">
-                {/* VIDEO PLAYER */}
-                <div class="lg:col-span-2 h-full">
-                    <VideoPlayer
-                        sources={videoSources()}
-                        objectFit="cover"
-                        loop={false}
+            <div class="grid grid-cols-1 lg:grid-cols-5 gap-4">
+                {/* VIDEO PLAYER + ROCKET VIEW */}
+                <div class="lg:col-span-3 h-full flex flex-col sm:flex-row gap-4">
+                    <div class="flex-1 min-w-0">
+                        <VideoPlayer
+                            sources={videoSources()}
+                            objectFit="cover"
+                            loop={false}
+                        />
+                    </div>
+                    <RocketView
+                        flightId={activeFlightId()}
+                        qw={sample().qw}
+                        qx={sample().qx}
+                        qy={sample().qy}
+                        qz={sample().qz}
+                        accelX={sample().padAx}
+                        accelY={sample().padAy}
+                        accelZ={sample().padAz}
+                        class="w-full sm:w-[30%] shrink-0 h-[340px] sm:h-auto sm:min-h-[300px]"
                     />
                 </div>
 

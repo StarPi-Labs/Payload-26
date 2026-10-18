@@ -34,6 +34,21 @@
 #define MPU6050_PRIORITY        5                       // Highest Priority
 #define MPU6050_HM_SKIP_SAMPLES 4
 
+/*-- IMU mounting -> payload (CAD) frame (CONFIG_IMU_REMAP_TO_CAD) --
+ * CAD frame: +X towards the viewer, away from the launch rail; +Y right as
+ * seen from the front; +Z up, towards the nose.
+ * Bench measurement, raw sensor axes: standing as in the rocket -> Z = -1 g,
+ * on its back (rail side down) -> X = +1 g, on its right side -> Y = +1 g.
+ * So the chip sits turned 180 deg about X:  CAD = (+X, -Y, -Z).
+ * Each CAD axis = SIGN * raw axis FROM (0 = X, 1 = Y, 2 = Z). Accel and gyro
+ * use the same mapping; it must stay a rotation (checked at compile time). */
+#define IMU_CAD_X_FROM          0
+#define IMU_CAD_X_SIGN          (+1)
+#define IMU_CAD_Y_FROM          1
+#define IMU_CAD_Y_SIGN          (-1)
+#define IMU_CAD_Z_FROM          2
+#define IMU_CAD_Z_SIGN          (-1)
+
 /*-- BME680/INA219 --*/
 #define BME_INA_I2C             I2C_NUM_1
 #define BME_INA_SDA             CONFIG_I2C1_MASTER_SDA
@@ -46,7 +61,10 @@
 #define BME680_CHIP_ID          0x61                     // BME680 / BME688
 #define BME680_PERIOD_PAD_MS    100                      // ~10Hz on the pad (POST/ARMED)
 #define BME680_PERIOD_FLIGHT_MS 20                       // ~50Hz T/P/H in BOOST/COAST
-#define BME680_GAS_INTERVAL_MS  1000                     // gas measurement cadence in COAST
+#define BME680_GAS_INTERVAL_MS  10000                    // gas cadence (pad + COAST; off in BOOST).
+                                                         // 10 s, not 1 s: the 320 degC heater pulse
+                                                         // self-heats the die and biases T/P/H; gas
+                                                         // resistance changes slowly anyway
 #define BME680_HM_SKIP_SAMPLES  5                        // telemetry throttle (POST/ARMED)
 #define BME680_HEATER_TEMP_C    320                      // gas heater target (deg C)
 #define BME680_HEATER_AMB_C     25                       // assumed ambient for heater calc

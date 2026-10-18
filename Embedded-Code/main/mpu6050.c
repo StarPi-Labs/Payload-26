@@ -163,6 +163,34 @@ union MPU6050Info {
 // TODO: we probably dont need this.
 #include "esp_timer.h"
 
+#if CONFIG_IMU_REMAP_TO_CAD
+/* A proper rotation (det +1), never a mirror: under a mirror the gyro - an
+ * axial vector - would come out with the wrong sign. Parity of the axis
+ * permutation times the three signs must be +1. */
+#define IMU_PERM_PARITY \
+    ((((IMU_CAD_Y_FROM) - (IMU_CAD_X_FROM) + 3) % 3 == 1) ? 1 : -1)
+_Static_assert(IMU_CAD_X_FROM != IMU_CAD_Y_FROM && IMU_CAD_Y_FROM != IMU_CAD_Z_FROM &&
+               IMU_CAD_X_FROM != IMU_CAD_Z_FROM, "IMU_CAD_*_FROM must use each axis once");
+_Static_assert(IMU_PERM_PARITY * (IMU_CAD_X_SIGN) * (IMU_CAD_Y_SIGN) * (IMU_CAD_Z_SIGN) == 1,
+               "IMU_CAD_* mapping is a mirror, not a rotation");
+
+static inline int16_t imu_axis(const int16_t *raw, int from, int sign)
+{
+    int16_t v = raw[from];
+    if (sign > 0) return v;
+    return (v == INT16_MIN) ? INT16_MAX : (int16_t)-v;   /* -32768 has no positive twin */
+}
+
+/* Sensor axes -> payload/CAD axes, in place, for one x/y/z triplet. */
+static void imu_to_cad(int16_t *xyz)
+{
+    const int16_t raw[3] = { xyz[0], xyz[1], xyz[2] };
+    xyz[0] = imu_axis(raw, IMU_CAD_X_FROM, IMU_CAD_X_SIGN);
+    xyz[1] = imu_axis(raw, IMU_CAD_Y_FROM, IMU_CAD_Y_SIGN);
+    xyz[2] = imu_axis(raw, IMU_CAD_Z_FROM, IMU_CAD_Z_SIGN);
+}
+#endif
+
 void mpu6050_raw2int(int16_t *dest, uint8_t *src) {
     dest[0] = (int16_t) ((src[0] << 8)  | src[1]);
     dest[1] = (int16_t) ((src[2] << 8)  | src[3]);
@@ -231,6 +259,12 @@ void mpu6050_task(void *arg) {
 
         flight_stats_tick(STAT_MPU6050);
         mpu6050_raw2int(mpu_info, mpu_raw);
+#if CONFIG_IMU_REMAP_TO_CAD
+        /* Before anything uses or logs the sample: from here on every consumer
+         * - SD log, radio, ground tools - sees payload (CAD) axes. */
+        imu_to_cad(&mpu_info[0]);   /* accel x y z */
+        imu_to_cad(&mpu_info[4]);   /* gyro  x y z */
+#endif
 
         /* Feed |accel| (g) to the flight state machine — it may change the mode. */
         float ax = mpu_info[0], ay = mpu_info[1], az = mpu_info[2];

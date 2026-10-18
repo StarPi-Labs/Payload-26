@@ -53,7 +53,8 @@ static uint8_t           s_ring[RING_CAP];
 static size_t            s_head, s_tail, s_used;
 static SemaphoreHandle_t s_lock;
 static volatile bool     s_started;
-static volatile uint32_t s_dropped, s_sent, s_seq;
+static volatile bool     s_stop;          /* set once, at launch */
+static volatile uint32_t s_dropped, s_sent, s_seq, s_nomem;
 
 /* ── Ring buffer (caller holds s_lock) ────────────────────────────────── */
 
@@ -86,6 +87,22 @@ static size_t ring_get(uint8_t *dst, size_t max)
 
 /* ── Drain task ───────────────────────────────────────────────────────── */
 
+/* Switch the radio off for the rest of the flight. Runs in the drain task -
+ * the only caller of esp_now_send() - so nothing races the teardown, and at
+ * low priority, so sensing and SD logging are never made to wait on it. */
+static void radio_teardown(void)
+{
+    esp_now_deinit();
+#if !CONFIG_ENABLE_TELEMETRY_NET
+    /* ESP-NOW is the radio's only user: stop it entirely. Frees the Wi-Fi
+     * buffers and stops the receiver drawing current for the whole flight. */
+    esp_wifi_stop();
+    esp_wifi_deinit();
+#endif
+    ESP_LOGI(TAG, "radio off for flight (%lu chunks sent, %lu dropped)",
+             (unsigned long)s_sent, (unsigned long)s_dropped);
+}
+
 static void telemetry_espnow_task(void *arg)
 {
     (void)arg;
@@ -95,7 +112,26 @@ static void telemetry_espnow_task(void *arg)
     pilog_chunk_hdr_t *hdr = (pilog_chunk_hdr_t *)frame;
     uint8_t *body = frame + sizeof(pilog_chunk_hdr_t);
 
+    int64_t  last_stats_us = esp_timer_get_time();
+    uint32_t last_sent = 0;
+
     while (1) {
+        if (s_stop) {
+            radio_teardown();
+            vTaskDelete(NULL);
+        }
+
+        /* Link diagnostics: a silent ground station with this line still
+         * climbing means the loss is in the air or on the receiver. */
+        int64_t now_us = esp_timer_get_time();
+        if (now_us - last_stats_us >= 5000000) {
+            ESP_LOGI(TAG, "sent %lu (+%lu)  dropped %lu  radio-busy %lu  queued %u B",
+                     (unsigned long)s_sent, (unsigned long)(s_sent - last_sent),
+                     (unsigned long)s_dropped, (unsigned long)s_nomem, (unsigned)s_used);
+            last_sent = s_sent;
+            last_stats_us = now_us;
+        }
+
         xSemaphoreTake(s_lock, portMAX_DELAY);
         size_t n = ring_get(body, PILOG_ESPNOW_CHUNK);
         xSemaphoreGive(s_lock);
@@ -117,6 +153,7 @@ static void telemetry_espnow_task(void *arg)
              * briefly rather than burning CPU retrying. The bytes are already
              * out of the ring, so this chunk is lost - acceptable, and the
              * receiver resyncs on the next sync word. */
+            s_nomem++;
             vTaskDelay(pdMS_TO_TICKS(5));
         } else if ((s_dropped++ % 100) == 0) {
             ESP_LOGW(TAG, "esp_now_send: %s", esp_err_to_name(err));
@@ -158,22 +195,35 @@ bool telemetry_espnow_init(void)
     }
 
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+#if !CONFIG_ENABLE_TELEMETRY_NET
+    /* ESP-NOW is the radio's only user, so never inherit Wi-Fi settings an
+     * earlier firmware left in NVS: an old build's SoftAP mode came back that
+     * way, on its own channel, and the ground station heard almost nothing. */
+    cfg.nvs_enable = 0;
+#endif
     err = esp_wifi_init(&cfg);
     if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
         ESP_LOGE(TAG, "wifi init failed: %s - link disabled", esp_err_to_name(err));
         return false;
     }
 
-    /* If telemetry_net.c already put us in AP mode, leave that alone - ESP-NOW
-     * works from any started mode. Only force STA when nothing has set a mode. */
+    /* We own the radio unless telemetry_net.c is compiled in and has already
+     * put it in AP mode - then leave its mode and channel alone, since moving
+     * the channel under a SoftAP would drop its clients. */
     wifi_mode_t mode = WIFI_MODE_NULL;
     esp_wifi_get_mode(&mode);
-    if (mode == WIFI_MODE_NULL) {
+#if CONFIG_ENABLE_TELEMETRY_NET
+    bool own_radio = (mode == WIFI_MODE_NULL);
+#else
+    bool own_radio = true;
+#endif
+    if (own_radio) {
         esp_wifi_set_storage(WIFI_STORAGE_RAM);
         if (esp_wifi_set_mode(WIFI_MODE_STA) != ESP_OK) {
             ESP_LOGE(TAG, "set_mode failed - link disabled");
             return false;
         }
+        mode = WIFI_MODE_STA;
     }
 
     err = esp_wifi_start();
@@ -182,9 +232,7 @@ bool telemetry_espnow_init(void)
         return false;
     }
 
-    /* Only pin the channel when we own the radio. If a SoftAP is already up,
-     * changing channel underneath it would drop its clients. */
-    if (mode == WIFI_MODE_NULL) {
+    if (own_radio) {
         esp_wifi_set_channel(PILOG_ESPNOW_CHANNEL, WIFI_SECOND_CHAN_NONE);
     }
     esp_wifi_set_ps(WIFI_PS_NONE);
@@ -218,15 +266,29 @@ bool telemetry_espnow_init(void)
         return false;
     }
 
+    /* Report the channel the radio is really on, not the one we asked for. */
+    uint8_t ch = 0;
+    wifi_second_chan_t second = WIFI_SECOND_CHAN_NONE;
+    esp_wifi_get_channel(&ch, &second);
+
     s_started = true;
-    ESP_LOGI(TAG, "ESP-NOW broadcasting on channel %d, %d B chunks",
-             PILOG_ESPNOW_CHANNEL, PILOG_ESPNOW_CHUNK);
+    ESP_LOGI(TAG, "ESP-NOW broadcasting on channel %u (%s), %d B chunks",
+             (unsigned)ch, (mode == WIFI_MODE_AP) ? "AP" : "STA", PILOG_ESPNOW_CHUNK);
+    if (ch != PILOG_ESPNOW_CHANNEL) {
+        ESP_LOGW(TAG, "channel %u != %d - the ground station will not hear us",
+                 (unsigned)ch, PILOG_ESPNOW_CHANNEL);
+    }
     return true;
+}
+
+void telemetry_espnow_shutdown(void)
+{
+    s_stop = true;
 }
 
 void telemetry_espnow_send(const uint8_t *data, size_t len)
 {
-    if (!s_started || data == NULL || len == 0) return;
+    if (!s_started || s_stop || data == NULL || len == 0) return;
 
     if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(LOCK_WAIT_MS)) != pdTRUE) {
         s_dropped++;
@@ -247,6 +309,7 @@ uint32_t telemetry_espnow_sent(void)    { return s_sent; }
 #else /* !CONFIG_ENABLE_TELEMETRY_ESPNOW */
 
 bool     telemetry_espnow_init(void)                       { return false; }
+void     telemetry_espnow_shutdown(void)                   { }
 void     telemetry_espnow_send(const uint8_t *d, size_t l) { (void)d; (void)l; }
 uint32_t telemetry_espnow_dropped(void)                    { return 0; }
 uint32_t telemetry_espnow_sent(void)                       { return 0; }

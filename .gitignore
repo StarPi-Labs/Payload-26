@@ -15,3 +15,5 @@ SD-Parser/flight_Sabato.json
 Dashboard/Backend/data/2026-09-16/telemetry/telemetry.txt
 # Third-party tool, cloned locally as described in P4-Board/c6-flasher/README.md
 P4-Board/c6-flasher/esp-usb-bridge/
+# Filter Lab's local working data: uploads, saved recipes, parse caches
+FilterLab/lab-data/

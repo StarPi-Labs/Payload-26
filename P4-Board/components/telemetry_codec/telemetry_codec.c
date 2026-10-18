@@ -45,10 +45,6 @@ static int payload_size_for(uint8_t type)
     }
 }
 
-/* INA219 fixed constants (see frameparser.py). */
-#define INA219_MAX_VOLT  16.0f
-#define INA219_ADC_BITS  4096.0f
-
 /* ── CRC-16/CCITT ─────────────────────────────────────────────────────── */
 
 static uint16_t crc16_ccitt(const uint8_t *data, size_t len)
@@ -187,7 +183,8 @@ static void proc_mpu(telemetry_codec_t *c, const uint8_t *p)
     c->state.accel_mag = sqrtf(c->state.accel_x * c->state.accel_x +
                                c->state.accel_y * c->state.accel_y +
                                c->state.accel_z * c->state.accel_z);
-    /* p + 6..7 is the die temperature, unused here. */
+    /* Die temperature: MPU6500 scaling, same as frameparser.py. */
+    c->state.imu_temp = rd_i16(p + 6) / 333.87f + 21.0f;
     float g = (c->gyro_sens > 0.0f) ? c->gyro_sens : 32.8f;
     c->state.roll  = rd_i16(p + 8)  / g;
     c->state.pitch = rd_i16(p + 10) / g;
@@ -211,7 +208,9 @@ static void proc_bme(telemetry_codec_t *c, const uint8_t *p, uint32_t ts_ms)
     if (c->state.pressure <= 0.0f) return;
 
     if (c->ground_pressure <= 0.0f) {
-        c->ground_pressure = c->state.pressure;
+        c->ground_pressure       = c->state.pressure;
+        c->state.ref_pressure    = c->state.pressure;
+        c->state.ref_temperature = c->state.temperature;
     }
 
     /* Standard barometric formula, same one json2telemetry.py uses so the live
@@ -223,6 +222,7 @@ static void proc_bme(telemetry_codec_t *c, const uint8_t *p, uint32_t ts_ms)
         float dt = (ts_ms - c->last_alt_ms) / 1000.0f;
         if (dt > 0.0f) {
             c->state.vertical_velocity = (c->state.altitude - c->last_alt) / dt;
+            c->state.vv_dt_s = dt;
         }
     }
     c->last_alt     = c->state.altitude;
@@ -233,10 +233,29 @@ static void proc_bme(telemetry_codec_t *c, const uint8_t *p, uint32_t ts_ms)
 static void proc_ina(telemetry_codec_t *c, const uint8_t *p)
 {
     float shunt_mv = rd_i16(p + 0) / 100.0f;
-    c->state.bus_voltage = rd_i16(p + 2) * INA219_MAX_VOLT / INA219_ADC_BITS;
+    /* 4 mV per LSB (INA219 datasheet); 16 V / 4096 read 2.4 % low. */
+    c->state.bus_voltage = rd_i16(p + 2) * 0.004f;
     float shunt_ohm = (c->ina_shunt_ohm > 0.0f) ? c->ina_shunt_ohm : 0.1f;
     c->state.current = shunt_mv / shunt_ohm;                    /* mA */
     c->state.power   = c->state.bus_voltage * c->state.current / 1000.0f;  /* W */
+}
+
+/* Energy since payload boot, from each power sample and the payload's own
+ * clock. Trapezoids between samples, so gaps in the link are bridged rather
+ * than lost; the stretch before the first sample we ever see is estimated at
+ * that sample's power. A payload reboot (clock jumps back) restarts it. */
+static void integrate_energy(telemetry_codec_t *c, uint32_t ts_ms)
+{
+    float p = c->state.power;
+    if (!c->have_last_ina || ts_ms + 5000 < c->last_ina_ms) {
+        c->state.energy_wh = (double)p * ts_ms / 3.6e6;
+    } else if (ts_ms > c->last_ina_ms) {
+        c->state.energy_wh += 0.5 * ((double)p + c->last_power)
+                            * (ts_ms - c->last_ina_ms) / 3.6e6;
+    }
+    c->last_power    = p;
+    c->last_ina_ms   = ts_ms;
+    c->have_last_ina = true;
 }
 
 /* NMEA fields arrive as fixed-width, NUL-padded ASCII. Copy out and trim. */
@@ -254,13 +273,6 @@ static void proc_gps(telemetry_codec_t *c, const uint8_t *p)
 {
     char f[16];
 
-    /* Field 0: fix status. 'A' = valid, 'V' = void. */
-    if (p[0] != 'A') {
-        c->state.gps_fix = false;
-        return;
-    }
-    c->state.gps_fix = true;
-
     /* Offsets follow frameparser.py's PACKET_DEFS GPS layout:
      * c(1) s(10) s(10) s(10) s(11) c(1) s(12) c(1) s(4) s(8) */
     const uint8_t *speed = p + 1;
@@ -270,6 +282,17 @@ static void proc_gps(telemetry_codec_t *c, const uint8_t *p)
     const uint8_t *ew    = p + 55;
     const uint8_t *sats  = p + 56;
     const uint8_t *alt   = p + 60;
+
+    /* Satellites in view are worth showing while it is still searching. */
+    nmea_field(f, sizeof(f), sats, 4);
+    c->state.sat_count = f[0] ? (uint8_t)atoi(f) : 0;
+
+    /* Field 0: fix status. 'A' = valid, 'V' = void. */
+    if (p[0] != 'A') {
+        c->state.gps_fix = false;
+        return;
+    }
+    c->state.gps_fix = true;
 
     nmea_field(f, sizeof(f), speed, 10);
     if (f[0]) c->state.horizontal_velocity = (float)atof(f) * 1.852f / 3.6f;  /* kn -> m/s */
@@ -292,9 +315,6 @@ static void proc_gps(telemetry_codec_t *c, const uint8_t *p)
         c->state.gps_lon = deg + (v - deg * 100.0) / 60.0;
         if (*ew == 'W') c->state.gps_lon = -c->state.gps_lon;
     }
-
-    nmea_field(f, sizeof(f), sats, 4);
-    if (f[0]) c->state.sat_count = (uint8_t)atoi(f);
 
     nmea_field(f, sizeof(f), alt, 8);
     if (f[0]) c->state.gps_alt = (float)atof(f);
@@ -329,16 +349,31 @@ static void proc_calib(telemetry_codec_t *c, const uint8_t *p)
 
 /* ── Frame dispatch ───────────────────────────────────────────────────── */
 
+static void count_sensor(telemetry_codec_t *c, telem_sensor_t s, uint32_t ts_ms)
+{
+    c->state.sensor[s].frames++;
+    c->state.sensor[s].last_ms = ts_ms;
+}
+
 static void dispatch(telemetry_codec_t *c, uint8_t type,
                      uint32_t ts_ms, const uint8_t *payload)
 {
     c->state.timestamp_ms = ts_ms;
 
     switch (type) {
+    case PKT_MPU6050:  count_sensor(c, TELEM_SENSOR_IMU,   ts_ms); break;
+    case PKT_BME680:   count_sensor(c, TELEM_SENSOR_BARO,  ts_ms); break;
+    case PKT_GAS:      count_sensor(c, TELEM_SENSOR_GAS,   ts_ms); break;
+    case PKT_INA219:   count_sensor(c, TELEM_SENSOR_POWER, ts_ms); break;
+    case PKT_GPS:      count_sensor(c, TELEM_SENSOR_GPS,   ts_ms); break;
+    default: break;
+    }
+
+    switch (type) {
     case PKT_MPU6050:  proc_mpu(c, payload);         break;
     case PKT_BME680:   proc_bme(c, payload, ts_ms);  break;
     case PKT_GPS:      proc_gps(c, payload);         break;
-    case PKT_INA219:   proc_ina(c, payload);         break;
+    case PKT_INA219:   proc_ina(c, payload); integrate_energy(c, ts_ms); break;
     case PKT_CALIB:    proc_calib(c, payload);       break;
     case PKT_SYSSTATE: c->state.mode = payload[0];   break;
     case PKT_GAS: {

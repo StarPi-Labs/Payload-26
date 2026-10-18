@@ -28,6 +28,12 @@ This module replaces that with three ideas:
    matter how far a 20-hour recording is zoomed out. Returned rows are real
    rows, never averages, so every channel in a row stays mutually consistent.
 
+The cache build also derives the payload's orientation and its acceleration in
+a fixed pad frame (attitude.py), stored as extra columns attitudeW/X/Y/Z and
+padAccelX/Y/Z for the rocket view. Orientation is an integral over the whole
+recording, so it cannot be computed from the decimated rows a client receives
+- it has to happen here, at full rate, once.
+
 The module has no Flask dependency so it can be tested and used from the
 command line on its own.
 """
@@ -43,6 +49,8 @@ from datetime import datetime
 
 import numpy as np
 import pandas as pd
+
+import attitude
 
 # Column order written by SD-Parser/json2telemetry.py. Files WITHOUT a header
 # row are interpreted positionally against this list; files WITH a header are
@@ -67,13 +75,25 @@ FLOAT64_COLUMNS = {"time", "gpsLat", "gpsLon"}
 # Channels whose extremes must survive decimation.
 KEY_COLUMNS = ("altitude", "acceleration", "velocity")
 
+# Orientation quaternion (body -> pad frame) and the acceleration in that frame,
+# derived at cache build time (attitude.py) unless the telemetry file already
+# carries the attitude columns itself.
+ATTITUDE_COLUMNS = attitude.ATTITUDE_COLUMNS
+DERIVED_COLUMNS = attitude.OUTPUT_COLUMNS
+
+# The rocket view needs the IMU in the payload's CAD frame, which the firmware
+# logs since the IMU remap (Embedded-Code CONFIG_IMU_REMAP_TO_CAD, flown from
+# 18 Oct 2026). Flights dated before that get no attitude columns.
+ATTITUDE_SINCE = "2026-10-18"
+
 # Decimal places in JSON output -- keeps responses small without visible loss.
-DECIMALS = {"time": 3, "gpsLat": 7, "gpsLon": 7, "gasResistance": 1}
+DECIMALS = {"time": 3, "gpsLat": 7, "gpsLon": 7, "gasResistance": 1,
+            **{c: 5 for c in ATTITUDE_COLUMNS}}
 DEFAULT_DECIMALS = 4
 
 ALLOWED_DATA_EXTENSIONS = {"txt", "csv", "log"}
 
-CACHE_VERSION = 1
+CACHE_VERSION = 2          # 2: attitude columns
 CACHE_DIRNAME = ".cache"
 
 # Files smaller than this are cached synchronously inside the request, so small
@@ -81,6 +101,10 @@ CACHE_DIRNAME = ".cache"
 SYNC_BUILD_BYTES = 32 * 1024 * 1024
 
 CHUNK_ROWS = 500_000
+
+# Share of a cache build's progress bar spent parsing the text file; the rest
+# is the attitude pass.
+PARSE_SHARE = 0.6
 
 
 # ---------------------------------------------------------------------------
@@ -221,6 +245,12 @@ def read_last_time(path, delimiter):
             if start == 0:
                 return None
             block *= 4
+
+
+def flight_date(path):
+    """The flight folder's date (data/<YYYY-MM-DD>/telemetry/<file>), or None."""
+    flight = os.path.basename(os.path.dirname(os.path.dirname(os.path.abspath(path))))
+    return flight if re.match(r"^\d{4}-\d{2}-\d{2}$", flight) else None
 
 
 def list_telemetry_files(flight_dir):
@@ -518,14 +548,20 @@ class TelemetryStore:
                         last_time = float(t[-1])
 
                     rows += n
-                    state.progress = min(0.97, fh.tell() / total)
+                    state.progress = min(PARSE_SHARE, PARSE_SHARE * fh.tell() / total)
         finally:
             for h in handles.values():
                 h.close()
 
         if rows > 0 and not monotonic:
             self._sort_by_time(tmp_dir, all_columns, dtypes, rows)
-            state.progress = 0.99
+        state.progress = PARSE_SHARE
+
+        attitude_info = self._write_attitude(path, info, state, tmp_dir, file_columns, rows)
+        manifest_columns = {c: np.dtype(dtypes[c]).name for c in all_columns}
+        if attitude_info.get("status") == "ok":
+            manifest_columns.update({c: "float32" for c in DERIVED_COLUMNS
+                                     if c not in manifest_columns})
 
         time_first = time_last = None
         if rows > 0:
@@ -539,9 +575,10 @@ class TelemetryStore:
             "source": {"size": st.st_size, "mtime": st.st_mtime,
                        "name": os.path.basename(path)},
             "rows": rows,
-            "columns": {c: np.dtype(dtypes[c]).name for c in all_columns},
+            "columns": manifest_columns,
             "fileColumns": file_columns,
             "sortedOnBuild": not monotonic,
+            "attitude": attitude_info,
             "timeFirst": time_first,
             "timeLast": time_last,
             "meta": info["meta"],
@@ -559,6 +596,49 @@ class TelemetryStore:
             shutil.rmtree(final_dir, ignore_errors=True)
         os.makedirs(os.path.dirname(final_dir), exist_ok=True)
         os.replace(tmp_dir, final_dir)
+
+    @staticmethod
+    def _write_attitude(path, info, state, tmp_dir, file_columns, rows):
+        """Derive attitudeW/X/Y/Z and padAccelX/Y/Z from the freshly written
+        accel/gyro columns.
+
+        Skipped when the telemetry file brings its own attitude columns (they
+        are already in the cache then), has no IMU data, or predates the CAD
+        frame (ATTITUDE_SINCE). Never fails the build: a problem here only
+        costs the rocket view, not the flight.
+        """
+        if all(c in file_columns for c in ATTITUDE_COLUMNS):
+            return {"status": "from file"}
+        date = flight_date(path)
+        if date is None or date < ATTITUDE_SINCE:
+            return {"status": f"skipped: flights before {ATTITUDE_SINCE} are not in the CAD frame"}
+        needed = ("time", "accelerationX", "accelerationY", "accelerationZ",
+                  "roll", "pitch", "yaw")
+        if rows == 0 or not all(c in file_columns for c in needed):
+            return {"status": "no IMU columns"}
+
+        def column(name):
+            dtype = np.float64 if name in FLOAT64_COLUMNS else np.float32
+            return np.memmap(os.path.join(tmp_dir, f"{name}.bin"), dtype=dtype,
+                             mode="r", shape=(rows,))
+
+        boosts = [m["time"] for m in info["meta"].get("modeTransitions") or []
+                  if m.get("mode") == "BOOST"]
+
+        def progress(frac):
+            state.progress = PARSE_SHARE + (0.99 - PARSE_SHARE) * frac
+
+        try:
+            # frameparser's names: 'roll' is the X rate, 'pitch' Y, 'yaw' Z.
+            derived, ainfo = attitude.estimate(
+                column("time"), column("accelerationX"), column("accelerationY"),
+                column("accelerationZ"), column("roll"), column("pitch"), column("yaw"),
+                flight_start=min(boosts) if boosts else None, progress=progress)
+        except Exception as exc:  # keep the flight usable without the view
+            return {"status": f"failed: {type(exc).__name__}: {exc}"}
+        for name, values in derived.items():
+            values.astype(np.float32).tofile(os.path.join(tmp_dir, f"{name}.bin"))
+        return ainfo
 
     @staticmethod
     def _sort_by_time(cache_dir, columns, dtypes, rows):

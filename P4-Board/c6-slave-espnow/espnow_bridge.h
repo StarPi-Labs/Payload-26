@@ -1,17 +1,17 @@
 /**
  * @file espnow_bridge.h
- * @brief ESP-NOW receiver bolted onto the esp-hosted slave firmware.
+ * @brief ESP-NOW receiver bolted onto the esp-hosted co-processor firmware.
  *
- * Drop-in add-on for the ESP32-C6 co-processor of the ESP32-P4-Function-EV-Board.
- * It ADDS ESP-NOW reception to the stock slave firmware without altering any of
- * it: Wi-Fi, Bluetooth and the whole esp-hosted RPC/data path keep working
- * exactly as before.
+ * Add-on for the ESP32-C6 co-processor of the ESP32-P4-Function-EV-Board. It
+ * ADDS ESP-NOW reception to esp-hosted's co-processor without altering any of
+ * it: Wi-Fi and the whole esp-hosted RPC/data path keep working as before.
  *
  * Received ESP-NOW payloads are forwarded to the P4 host over esp-hosted's
- * documented custom-data channel, which is a general-purpose user-data pipe the
- * component already provides - no protobuf changes, no new RPCs.
+ * peer-data channel (esp-hosted 3.x: eh_cp_feat_peer_data_send), a
+ * general-purpose user-data pipe the component already provides - no protobuf
+ * changes, no new RPCs.
  *
- * See README.md in this folder for how to graft it into the slave project.
+ * Built by the co-processor project in ./cp - see README.md in this folder.
  */
 #pragma once
 
@@ -21,12 +21,12 @@
 /**
  * Initialise ESP-NOW and start forwarding to the host.
  *
- * Call AFTER the slave firmware has brought Wi-Fi up (esp_wifi_start has run);
- * ESP-NOW requires a started Wi-Fi stack. In practice that means calling it at
- * the end of the slave's own app_main.
+ * ESP-NOW requires a started Wi-Fi stack. esp-hosted 3.x only starts Wi-Fi
+ * when the host asks, so if it is not running yet this initialises it in
+ * station mode itself. Needs the default event loop to exist.
  *
- * Never aborts. On failure it logs and returns false, leaving the slave's
- * normal Wi-Fi/Bluetooth duties completely unaffected.
+ * Never aborts. On failure it logs and returns false, leaving the
+ * co-processor's normal duties completely unaffected.
  *
  * @return true if ESP-NOW is up and the forwarding task is running.
  */

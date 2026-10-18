@@ -19,4 +19,15 @@ export interface AtmosphericSample extends InertialSample {
     busVolt: number
     current: number
     power: number
+    /** Orientation quaternion, body (CAD frame) -> pad frame (X towards the
+     * viewer, Y right, Z up). Derived by the backend; all zero when the
+     * flight has none. */
+    qw: number
+    qx: number
+    qy: number
+    qz: number
+    /** Acceleration in that pad frame, gravity removed, m/s^2 (backend-derived). */
+    padAx: number
+    padAy: number
+    padAz: number
 }

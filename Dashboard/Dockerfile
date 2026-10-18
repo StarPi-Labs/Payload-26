@@ -41,7 +41,7 @@ WORKDIR /app/Backend
 COPY Backend/requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY Backend/server.py Backend/telemetry_store.py ./
+COPY Backend/server.py Backend/telemetry_store.py Backend/attitude.py ./
 COPY --from=frontend /build/Frontend/dist /app/Frontend/dist
 
 # Run unprivileged. /cache is created here so a fresh named volume inherits the

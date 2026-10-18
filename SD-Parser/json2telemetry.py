@@ -201,8 +201,11 @@ def convert(frames, target_altitude=None, departure_altitude=0.0):
             state["current"] = d["current"]
             state["power"] = state["busVoltage"] * state["current"] / 1000.0
         if "gpsLat" in d:
-            state["gpsLat"] = d["gpsLat"]
-            state["gpsLon"] = d["gpsLon"]
+            # frameparser keeps the hemisphere as a letter next to the value;
+            # south and west are negative (as in pilog_reader.py). Without
+            # this the EuRoC site in Portugal (8.2 W) lands in Sardinia.
+            state["gpsLat"] = -d["gpsLat"] if d.get("gpsLat_N") == "S" else d["gpsLat"]
+            state["gpsLon"] = -d["gpsLon"] if d.get("gpsLon_W") == "W" else d["gpsLon"]
             state["gpsAlt"] = d.get("gpsAlt", state["gpsAlt"])
             if first_gps_row is None:
                 first_gps_row = len(rows)

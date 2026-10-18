@@ -1,16 +1,16 @@
 /**
  * @file espnow_bridge.c
- * @brief ESP-NOW receiver bolted onto the esp-hosted slave firmware.
+ * @brief ESP-NOW receiver bolted onto the esp-hosted co-processor firmware.
  *
  * Data path:
  *
  *   rocket S3  --ESP-NOW-->  C6 recv callback  -->  queue  -->  forward task
  *                                                                    |
- *                              esp_hosted_send_custom_data(PILOG_MSGID_TELEMETRY)
+ *                          eh_cp_feat_peer_data_send(PILOG_MSGID_TELEMETRY)
  *                                                                    |
  *                                                            SDIO --> P4 host
  *
- * Two rules drive the shape of this file:
+ * Three rules drive the shape of this file:
  *
  *  1. The ESP-NOW receive callback runs in Wi-Fi task context. Espressif's
  *     documentation is explicit that it must not block. So it does nothing but
@@ -18,13 +18,19 @@
  *     Wi-Fi driver and, because this is the same radio esp-hosted serves the
  *     P4 with, would degrade the host's Wi-Fi too.
  *
- *  2. esp_hosted_send_custom_data() talks to the host over SDIO and can block.
+ *  2. eh_cp_feat_peer_data_send() talks to the host over SDIO and can block.
  *     It is therefore called only from our own task, never from the callback.
  *
- * Nothing here touches the slave's existing behaviour. ESP-NOW coexists with
- * station and SoftAP mode on one radio, so Wi-Fi and Bluetooth for the P4 carry
- * on untouched - the one constraint is that ESP-NOW follows whatever channel
- * the Wi-Fi interface is on (see PILOG_ESPNOW_CHANNEL).
+ *  3. In esp-hosted 3.x the co-processor does NOT start Wi-Fi on its own - it
+ *     waits for the host to request it over RPC. The P4 live display never
+ *     does, so the bridge brings Wi-Fi up itself when nobody else has. That is
+ *     safe alongside a later host request: esp-hosted wraps esp_wifi_init(),
+ *     returns ESP_OK for a repeat init with the same config, and the host's
+ *     start request is a no-op once Wi-Fi is running.
+ *
+ * ESP-NOW coexists with station and SoftAP mode on one radio, so Wi-Fi for the
+ * P4 carries on untouched - the one constraint is that ESP-NOW follows whatever
+ * channel the Wi-Fi interface is on (see PILOG_ESPNOW_CHANNEL).
  */
 
 #include "espnow_bridge.h"
@@ -38,8 +44,9 @@
 #include "esp_log.h"
 #include "esp_now.h"
 #include "esp_wifi.h"
+#include "nvs_flash.h"
 
-#include "esp_hosted_peer_data.h"   /* esp_hosted_send_custom_data() */
+#include "eh_cp_feat_peer_data.h"   /* eh_cp_feat_peer_data_send() */
 #include "pilog_link.h"
 
 static const char *TAG = "espnow_br";
@@ -112,24 +119,79 @@ static void espnow_forward_task(void *arg)
             continue;   /* idle - loop so the stats log below still ticks */
         }
 
-        esp_err_t err = esp_hosted_send_custom_data(PILOG_MSGID_TELEMETRY,
-                                                    item.data, item.len);
+        /* Fails until the P4 has connected over SDIO; those chunks are simply
+         * lost, which is fine for a live display. */
+        esp_err_t err = eh_cp_feat_peer_data_send(PILOG_MSGID_TELEMETRY,
+                                                  item.data, item.len);
         if (err == ESP_OK) {
             s_forwarded++;
         } else if ((s_fwd_errors++ % 50) == 0) {
-            ESP_LOGW(TAG, "send_custom_data failed: %s", esp_err_to_name(err));
+            ESP_LOGW(TAG, "peer_data_send failed: %s (host not connected yet?)",
+                     esp_err_to_name(err));
         }
 
         /* Periodic health line, cheap enough to leave in. Silence here while
          * the rocket is powered means the ESP-NOW side is the problem; errors
          * here mean the SDIO side is. */
-        if (s_forwarded - last_report >= 200) {
-            last_report = s_forwarded;
-            ESP_LOGI(TAG, "rx %lu  fwd %lu  dropped %lu  seq-gaps %lu",
+        if (s_received - last_report >= 200) {
+            last_report = s_received;
+            ESP_LOGI(TAG, "rx %lu  fwd %lu  dropped %lu  seq-gaps %lu  fwd-err %lu",
                      (unsigned long)s_received, (unsigned long)s_forwarded,
-                     (unsigned long)s_dropped,  (unsigned long)s_gaps);
+                     (unsigned long)s_dropped,  (unsigned long)s_gaps,
+                     (unsigned long)s_fwd_errors);
         }
     }
+}
+
+/* ── Wi-Fi bring-up ───────────────────────────────────────────────────── */
+
+/* Start Wi-Fi in station mode unless the host already has. Returns the mode
+ * Wi-Fi ends up in, or WIFI_MODE_NULL on failure. */
+static wifi_mode_t ensure_wifi_running(void)
+{
+    wifi_mode_t mode = WIFI_MODE_NULL;
+    esp_err_t err = esp_wifi_get_mode(&mode);
+
+    if (err == ESP_ERR_WIFI_NOT_INIT) {
+        /* The co-processor never initialises NVS itself, and Wi-Fi keeps its
+         * PHY calibration there. */
+        err = nvs_flash_init();
+        if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+            nvs_flash_erase();
+            err = nvs_flash_init();
+        }
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "nvs_flash_init: %s - continuing", esp_err_to_name(err));
+        }
+
+        wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+        err = esp_wifi_init(&cfg);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "esp_wifi_init failed: %s", esp_err_to_name(err));
+            return WIFI_MODE_NULL;
+        }
+        esp_wifi_set_storage(WIFI_STORAGE_RAM);
+        mode = WIFI_MODE_NULL;
+        ESP_LOGI(TAG, "Wi-Fi initialised by the bridge (host has not requested it)");
+    } else if (err != ESP_OK) {
+        ESP_LOGE(TAG, "esp_wifi_get_mode failed: %s", esp_err_to_name(err));
+        return WIFI_MODE_NULL;
+    }
+
+    if (mode == WIFI_MODE_NULL) {
+        mode = WIFI_MODE_STA;
+        err = esp_wifi_set_mode(mode);
+        if (err == ESP_OK) err = esp_wifi_start();
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "Wi-Fi start failed: %s", esp_err_to_name(err));
+            return WIFI_MODE_NULL;
+        }
+        /* Keep the receiver listening continuously. Modem sleep would save
+         * power the USB-powered ground station does not need, at the cost of
+         * missed packets. */
+        esp_wifi_set_ps(WIFI_PS_NONE);
+    }
+    return mode;
 }
 
 /* ── Public API ───────────────────────────────────────────────────────── */
@@ -138,13 +200,9 @@ bool espnow_bridge_init(void)
 {
     if (s_started) return true;
 
-    /* The slave firmware owns Wi-Fi init; we only require that it has started.
-     * esp_now_init() fails cleanly if it has not, so this is a clear error
-     * rather than a subtle malfunction. */
-    wifi_mode_t mode = WIFI_MODE_NULL;
-    if (esp_wifi_get_mode(&mode) != ESP_OK || mode == WIFI_MODE_NULL) {
-        ESP_LOGE(TAG, "Wi-Fi not started yet - call espnow_bridge_init() after "
-                      "the slave has brought Wi-Fi up");
+    wifi_mode_t mode = ensure_wifi_running();
+    if (mode == WIFI_MODE_NULL) {
+        ESP_LOGE(TAG, "no Wi-Fi - ESP-NOW bridge disabled");
         return false;
     }
 
@@ -181,10 +239,10 @@ bool espnow_bridge_init(void)
         return false;
     }
 
-    /* Only pin the channel when nothing else is dictating it. If the slave has
-     * associated with an access point on the host's behalf, that association
-     * owns the channel and forcing ours would break the host's Wi-Fi - the
-     * rocket has to follow the AP's channel in that case instead. */
+    /* Only pin the channel when nothing else is dictating it. If the host has
+     * associated with an access point, that association owns the channel and
+     * forcing ours would break the host's Wi-Fi - the rocket has to follow the
+     * AP's channel in that case instead. */
     uint8_t primary = 0;
     wifi_second_chan_t second = WIFI_SECOND_CHAN_NONE;
     esp_wifi_get_channel(&primary, &second);

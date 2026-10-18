@@ -8,7 +8,7 @@ const AttitudeCard: Component<AttitudeCardProps> = (props) => {
     return (
         <TelemetryCard
             title="Attitude"
-            subtitle="Roll, pitch, yaw, acceleration"
+            subtitle="Acceleration and turn rates · X front, Y right, Z nose"
             badge={props.timestampLabel}
             class={props.class}
         >
@@ -16,9 +16,11 @@ const AttitudeCard: Component<AttitudeCardProps> = (props) => {
                 <MetricStat label="Accel X" value={props.accelX} unit="m/s²" precision={2} />
                 <MetricStat label="Accel Y" value={props.accelY} unit="m/s²" precision={2} />
                 <MetricStat label="Accel Z" value={props.accelZ} unit="m/s²" precision={2} />
-                <MetricStat label="Roll" value={props.roll} unit="deg" precision={1} />
-                <MetricStat label="Pitch" value={props.pitch} unit="deg" precision={1} />
-                <MetricStat label="Yaw" value={props.yaw} unit="deg" precision={1} />
+                {/* The telemetry's roll/pitch/yaw columns are gyro RATES about the
+                    payload's X/Y/Z axes (frameparser's names), not angles. */}
+                <MetricStat label="Rate X" value={props.roll} unit="°/s" precision={1} />
+                <MetricStat label="Rate Y" value={props.pitch} unit="°/s" precision={1} />
+                <MetricStat label="Rate Z (spin)" value={props.yaw} unit="°/s" precision={1} />
             </div>
             <div class="flex flex-wrap gap-3">
                 <StatusChip label="Frame status" value={props.status} trueLabel="OK" falseLabel="FAULT" />

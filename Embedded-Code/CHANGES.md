@@ -75,13 +75,19 @@ The flush-on-full double buffer was replaced with a **circular history buffer + 
 - Per-sensor debug `ESP_LOGI`s are enabled (BME680 prints a ~2 Hz, mode-labelled echo — note the echo is throttled, so it does **not** reflect the real sampling rate).
 - **Live rate monitor** (`flight_stats.c`): a 1 Hz task logs the *achieved* samples/sec for every sensor, tagged with the flight mode — e.g. `[BOOST] mpu=80  ina=10  bme=28  gps=1  (Hz)`. This is the real per-mode rate (the per-sensor echoes are throttled and hide it). Each sensor task calls `flight_stats_tick()` on every produced sample.
 
-### Telemetry transport (wired, for now)
-- The S3 has **no Classic BT/SPP** (BLE-only), so the BT-disabled branch of `bt_serial_bridge.c` streams the `hm_send` telemetry over a wired UART instead — same frame format, off a wire. Init moved out of the power-on-only path so it runs on every reset.
-- **Console vs. telemetry, board-agnostic:** console stays on the **standard default UART0/USB-serial path** (`idf.py monitor` works the same on any board — DevKitC, bare module, breadboard). Telemetry is a **separate wire, UART1 TX=GPIO10 @ 115200**, wired to an external USB-TTL adapter. (A DevKitC-only trick that instead put the console on native USB-Serial-JTAG and telemetry on UART0's native pins was tried and reverted — it broke once sensors moved to a breadboard build, since native-USB console depends on GPIO19/20 being wired to a real USB connector with correct D+/D- strapping, which a breadboard bring-up won't have.) The parser's CRC check stays on regardless, since a stray ROM-bootloader chirp or noise on either wire is still possible and should be dropped rather than crash the parser.
-- The telemetry/`hm` path is active in **POST/ARMED**; BOOST/COAST high-rate data goes to the SD log instead, so the wire is quiet in flight modes (by design).
-- Future: replace this one transport with an **ESP-NOW** link to a ground ESP32 that bridges to USB; the rest of the chain is unchanged.
+### Sensor orientation & polarity (Oct 2026)
+- **IMU axes are logged in the payload (CAD) frame** (`CONFIG_IMU_REMAP_TO_CAD`, default y): **+X** away from the launch rail, **+Y** right seen from the front, **+Z** up towards the nose. The chip sits turned 180° about X, so `CAD = (+X, −Y, −Z)`; accel and gyro share the mapping (`IMU_CAD_*` in `sensor_config.h`, compile-time checked to be a rotation, never a mirror). Standing on the pad now reads **Z ≈ +1 g**. Launch detection uses |accel| and is unaffected.
+  - ⚠ Recordings made **before** this change have raw chip axes: negate **Y and Z** (accel and gyro) to compare them with newer files.
+- **INA219 sign** (`CONFIG_INA219_SHUNT_REVERSED`, default y): the harness has VIN+/VIN− swapped, so the shunt reading is negated before logging. Say **n** once the wires are corrected.
 
-## On-SD / over-BT frame format
+### Telemetry transports
+- **Bluetooth removed entirely (Oct 2026).** The S3 has no Classic BT/SPP (BLE-only), so `bt_serial_bridge.c` only ever ran its wired-UART fallback. That code is now `telemetry_uart.c`, `CONFIG_BT_ENABLED` is off, and `bt` is no longer a component requirement.
+- **Wired:** UART0 TX=**GPIO43** @ 115200 — the DevKitC's "UART" USB port, no extra wiring — with the console on **USB-Serial-JTAG** (`CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG`), so the two streams never mix. Carries the `hm_send` pad telemetry (POST/ARMED only, quiet in flight by design) and, with no SD card, mirrors the exact stream the card would have received. Init runs on every reset. *(An earlier UART1/GPIO10 layout was reverted in `020fa9b`.)*
+- **Radio: ESP-NOW** (`CONFIG_ENABLE_TELEMETRY_ESPNOW`), broadcast on channel 6 to the ESP32-C6 of the P4 ground station (`P4-Board/c6-slave-espnow`) — no pairing, no MAC addresses. Fed by `radio_forward()` in `frame_logger.c`, which keeps its **own cursor** into the PSRAM ring: the radio gets every frame live, while the SD keeps its sparse ARMED cadence, plus a CALIB frame every 5 s so a receiver can join at any moment.
+- **Radio off at launch** (`CONFIG_TELEMETRY_RADIO_OFF_AT_LAUNCH`, default y): at BOOST the logger only sets a flag; the radio's own low-priority task deinitialises ESP-NOW and stops and deinitialises Wi-Fi, so no flight-critical task ever waits on the teardown and the SD log is untouched.
+- The parser's CRC check stays on regardless, since a stray ROM-bootloader chirp or noise on any transport is still possible and should be dropped rather than crash the parser.
+
+## On-SD / over-the-air frame format
 
 Active writer: `main/frame_logger.c` (→ `/sd/fly.bin`). Authoritative parser: `SD-Parser/frameparser.py` (also reads the same frames live over the telemetry UART / future ESP-NOW link at 115200).
 

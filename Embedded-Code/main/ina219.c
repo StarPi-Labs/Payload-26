@@ -202,6 +202,13 @@ void IRAM_ATTR ina219_task(void *arg) {
         flight_stats_tick(STAT_INA219);
 
         ina219_info.shunt_voltage = (int16_t)((shunt_volt[0] << 8) | shunt_volt[1]);
+#if CONFIG_INA219_SHUNT_REVERSED
+        /* Harness has VIN+/VIN- swapped: flip the sign here, before logging, so
+         * everything downstream reads positive. Undo in menuconfig once the
+         * wires are corrected. (-32768 has no positive twin; clamp it.) */
+        ina219_info.shunt_voltage = (ina219_info.shunt_voltage == INT16_MIN)
+                                  ? INT16_MAX : (int16_t)-ina219_info.shunt_voltage;
+#endif
         ina219_info.bus_voltage   = (int16_t)((bus_volt[0] << 8) | bus_volt[1]);
         ina219_info.bus_voltage   = ina219_info.bus_voltage >> 3;
 
